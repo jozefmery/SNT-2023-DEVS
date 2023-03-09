@@ -55,7 +55,7 @@ LIBDIRS = $(addprefix -L, )
 
 default: release
 all: default
-.PHONY: default all clean run archive crun debug release
+.PHONY: default all clean run archive crun debug release format
 
 RELDIR  = Release
 DDIR    = Debug
@@ -119,3 +119,6 @@ clean:
 # create final archive
 archive:
 	$(ARCHIVER) $(ARCHIVE) $(ARCHIVELIST)
+
+format:
+	@clang-format -style=file -i $(SOURCES) $(HEADERS)
