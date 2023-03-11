@@ -3,3 +3,6 @@ bin/
 
 # objects
 obj/
+
+# vs code settings
+.vscode/
