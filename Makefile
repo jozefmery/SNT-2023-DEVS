@@ -34,7 +34,7 @@ SRCEXT    = cpp
 OBJEXT    = o
 HDREXT    = hpp
 
-# compiler options 
+# compiler options
 CC          = g++
 PLATFORM    = -m64
 CFLAGS      = -pedantic -Wextra -Wall $(PLATFORM)
