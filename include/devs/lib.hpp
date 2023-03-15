@@ -49,6 +49,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Atom
 namespace Sim {
 
 template <typename Time> class Event {
+
   public: // aliases
     using Action = std::function<void()>;
 
@@ -69,8 +70,11 @@ template <typename Time> class Event {
     auto cancel() { *cancelled_ = true; }
 
     auto get_cancel_callback() const {
-        return [= cancelled_]() { *cancelled_ = true; }
+        auto copy = cancelled_;
+        return [copy]() { *copy = true; };
     }
+
+    auto time() const { return time_; }
 
   private: // members
     Time time_;
@@ -80,7 +84,7 @@ template <typename Time> class Event {
 
 template <typename Time> class EventSorter {
   public:
-    bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time > r.time; }
+    bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time() > r.time(); }
 };
 
 template <typename Time>
@@ -128,16 +132,21 @@ template <typename Time = double> class Simulator {
     auto schedule_event(const Event<Time> event) { calendar_.push(event); }
 
     auto run() {
+        std::cout << "[T = 0] Starting simulation...\n";
+
         while (!calendar_.empty()) {
-            const auto event = context.calendar.top();
-            advance_time(event.time, context);
-            std::cout << "Advancing time to " << event.time << "\n";
-            std::cout << "Executing event action ...\n";
-            event.action();
-            context.calendar.pop();
+            // TODO
+            // const auto event = calendar.top();
+            // advance_time(event.time, context);
+            // std::cout << "Advancing time to " << event.time << "\n";
+            // std::cout << "Executing event action ...\n";
+            // event.action();
+            // context.calendar.pop();
         }
 
-        std::cout << "Finished simulation at time " << context.time << "\n";
+        std::cout << "[T = " << time_ << "] "
+                  << "Finished simulation"
+                  << "\n";
     }
 
   private: // methods

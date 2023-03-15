@@ -14,4 +14,8 @@
 //     return Devs::Model::create_atomic<double, int, double, double>(2.0, delta_external, delta_internal, out, ta);
 // }
 
-int main() {}
+int main() {
+    auto simulator = Devs::Sim::Simulator{};
+    simulator.run();
+    return 0;
+}
