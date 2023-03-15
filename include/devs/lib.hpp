@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -26,86 +27,125 @@ constexpr auto INF = std::numeric_limits<double>::infinity();
 
 namespace Model {
 
-template <typename X, typename Y, typename S, typename Time = double> struct Atomic {
-    S s;
-    std::function<S(const S&, const Time&, const X&)> delta_external;
-    std::function<S(const S&)> delta_internal;
-    std::function<Y(const S&)> out;
-    std::function<Time(const S&)> ta;
-};
+template <typename X, typename S, typename Time>
+using DeltaExternalFn = std::function<S(const S&, const Time&, const X&)>;
 
-template <typename X, typename Y, typename S, typename Time = double>
-auto create_atomic(const S init_s, const std::function<S(const S&, const Time&, const X&)> delta_external,
-                   const std::function<S(const S&)> delta_internal, const std::function<Y(const S&)> out,
-                   const std::function<Time(const S&)> ta) {
-    return Atomic<X, Y, S, Time>{init_s, delta_external, delta_internal, out, ta};
-}
+template <typename S> using DeltaInternalFn = std::function<S(const S&)>;
+
+template <typename Y, typename S> using OutFn = std::function<Y(const S&)>;
+
+template <typename S, typename Time> using TimeAdvanceFn = std::function<Time(const S&)>;
+
+template <typename X, typename Y, typename S, typename Time = double> class Atomic {
+    S s;
+    DeltaExternalFn<X, S, Time> delta_external;
+    DeltaInternalFn<S> delta_internal;
+    OutFn<Y, S> out;
+    TimeAdvanceFn<S, Time> ta;
+};
 
 } // namespace Model
 
 namespace Sim {
 
-using Action = std::function<void()>;
+template <typename Time> class Event {
+  public: // aliases
+    using Action = std::function<void()>;
 
-template <typename Time> struct Event {
-    Time time;
-    Action action;
+  public: // ctors, dtor
+    explicit Event(const Time time, const Action action)
+        : time_{time}, action_{action}, cancelled_{std::make_shared<bool>(false)} {}
+
+  public: // methods
+    auto to_string() const {
+        std::stringstream s;
+        s << std::boolalpha; // write boolean as true/false
+        s << "Event{ time = " << time_ << ", cancelled = " << *cancelled_ << " }";
+        return s.str();
+    }
+
+    auto is_cancelled() const { return *cancelled_; }
+
+    auto cancel() { *cancelled_ = true; }
+
+    auto get_cancel_callback() const {
+        return [= cancelled_]() { *cancelled_ = true; }
+    }
+
+  private: // members
+    Time time_;
+    Action action_;
+    std::shared_ptr<bool> cancelled_;
 };
 
-template <typename Time> auto event_to_string(const Event<Time>& event) {
-    std::stringstream s;
-    s << "Event{ time = " << event.time << " }";
-    return s.str();
-}
-
-template <typename Time> struct CompareEvent {
-    bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time < r.time; }
+template <typename Time> class EventSorter {
+  public:
+    bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time > r.time; }
 };
 
 template <typename Time>
-using Calendar = std::priority_queue<Event<Time>, std::vector<Event<Time>>, CompareEvent<Time>>;
+using CalendarBase = std::priority_queue<Event<Time>, std::vector<Event<Time>>, EventSorter<Time>>;
 
-template <typename Time> auto calendar_to_string(Calendar<Time> calendar) {
-    // pass calendar as value as items are deleted when traversing
+template <typename Time> class Calendar : public CalendarBase<Time> {
 
-    if (calendar.empty()) {
-        return std::string("{}");
-    }
+  public: // ctors, dtor
+    explicit Calendar() : CalendarBase<Time>{EventSorter<Time>{}} {}
 
-    std::stringstream s;
-    s << "{ ";
-    for (; !calendar.empty(); calendar.pop()) {
+  public: // methods
+    auto to_string() const {
+        // pass calendar as value as items are deleted when traversing
+        auto copy = *this;
 
-        const auto event = calendar.top();
-        s << event_to_string(event);
-        if (calendar.size() > 1) {
-            s << ", ";
+        std::stringstream s;
+        s << "|";
+        for (; !copy.empty(); copy.pop()) {
+
+            const auto event = copy.top();
+            s << event.to_string();
+            if (copy.size() > 1) {
+                s << " | ";
+            }
         }
+        s << "|";
+        return s.str();
     }
-    s << " }";
-    return s.str();
-}
 
-template <typename Time = double> struct Context {
-    Time time{};
-    Calendar<Time> calendar{CompareEvent<Time>{}};
+    auto next() {} // TODO continue here
 };
 
-template <typename Time = double> auto create_context() { return Context<Time>{}; }
+template <typename Time = double> class Simulator {
 
-template <typename Time> auto context_to_string(const Context<Time>& context) {
-    std::stringstream s;
-    s << "Context{ time = " << context.time << ", calendar = " << calendar_to_string(context.calendar) << " }";
-    return s.str();
-}
+  public: // ctors, dtor
+    explicit Simulator() : time_{}, calendar_{} {}
 
-template <typename Time> auto advance_time(const Time to, Context<Time>& context) { context.time = to; }
+  public: // methods
+    auto to_string() const {
+        std::stringstream s;
+        s << "Simulator{ time = " << time_ << ", calendar = " << calendar_.to_string() << " }";
+        return s.str();
+    }
 
-template <typename Time> auto schedule_event(const Time at, const Action action, Context<Time>& context) {
-    context.calendar.push({at, action});
-}
+    auto schedule_event(const Event<Time> event) { calendar_.push(event); }
 
-template <typename X, typename Y, typename S, typename Time>
-void simulate(Context<Time> context, Model::Atomic<X, Y, S, Time> model) {}
+    auto run() {
+        while (!calendar_.empty()) {
+            const auto event = context.calendar.top();
+            advance_time(event.time, context);
+            std::cout << "Advancing time to " << event.time << "\n";
+            std::cout << "Executing event action ...\n";
+            event.action();
+            context.calendar.pop();
+        }
+
+        std::cout << "Finished simulation at time " << context.time << "\n";
+    }
+
+  private: // methods
+    auto advance_time(const Time to) { time_ = to; }
+
+  private: // members
+    Time time_;
+    Calendar<Time> calendar_;
+};
 } // namespace Sim
 } // namespace Devs
