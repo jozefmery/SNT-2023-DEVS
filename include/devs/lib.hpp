@@ -133,30 +133,43 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
     }
 };
 
-template <typename Time = double> class Printer {
+template <typename Time = double> class MutePrinter {
 
   public: // ctors, dtor
-    explicit Printer(std::ostream& stream = std::cout) : s_{stream} {}
+    explicit MutePrinter(std::ostream& stream = std::cout) : s_{stream} {}
 
   public: // methods
-    auto on_start(const Time time) { s_ << "[T = " << time << "] Starting simulation...\n"; }
-    auto on_end(const Time time) { s_ << "[T = " << time << "] Finished simulation\n"; }
-    auto on_time_advance(const Time prev, const Time next) {
-        s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
-    }
+    void on_start(const Time) {}
+    void on_end(const Time) {}
+    void on_time_advance(const Time, const Time) {}
 
-    auto on_event_execution(const Event<Time>& event) {
-        s_ << "[T = " << event.time() << "] Executing event " << event.to_string() << "\n";
-    }
+    void on_event_execution(const Event<Time>&) {}
 
-  private: // members
+  protected: // members
     std::ostream& s_;
 };
 
-template <typename Time = double> class Simulator {
+template <typename Time = double> class VerbosePrinter : public MutePrinter<Time> {
 
   public: // ctors, dtor
-    explicit Simulator(const Printer<Time> printer = Printer<Time>{}) : time_{}, calendar_{}, printer_{printer} {}
+    explicit VerbosePrinter(std::ostream& stream = std::cout) : MutePrinter<Time>{stream} {}
+
+  public: // methods
+    void on_start(const Time time) { this->s_ << "[T = " << time << "] Starting simulation...\n"; }
+    void on_end(const Time time) { this->s_ << "[T = " << time << "] Finished simulation\n"; }
+    void on_time_advance(const Time prev, const Time next) {
+        this->s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
+    }
+
+    void on_event_execution(const Event<Time>& event) {
+        this->s_ << "[T = " << event.time() << "] Executing event: " << event.to_string() << "\n";
+    }
+};
+
+template <typename Time = double, typename Printer = VerbosePrinter<Time>> class Simulator {
+
+  public: // ctors, dtor
+    explicit Simulator(const Printer printer = Printer{}) : time_{}, calendar_{}, printer_{printer} {}
 
   public: // methods
     auto to_string() const {
@@ -174,7 +187,6 @@ template <typename Time = double> class Simulator {
         std::optional<Event<Time>> event{};
 
         while (event = calendar_.next()) {
-            printer_.on_time_advance(time_, event->time());
             advance_time(event->time());
             printer_.on_event_execution(*event);
             event->action();
@@ -184,12 +196,15 @@ template <typename Time = double> class Simulator {
     }
 
   private: // methods
-    auto advance_time(const Time to) { time_ = to; }
+    auto advance_time(const Time to) {
+        printer_.on_time_advance(time_, to);
+        time_ = to;
+    }
 
   private: // members
     Time time_;
     Calendar<Time> calendar_;
-    Printer<Time> printer_;
+    Printer printer_;
 };
 } // namespace Sim
 } // namespace Devs
