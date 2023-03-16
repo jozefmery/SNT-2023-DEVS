@@ -9,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -27,14 +28,14 @@ constexpr auto INF = std::numeric_limits<double>::infinity();
 
 namespace Model {
 
-template <typename X, typename S, typename Time>
+template <typename X, typename S, typename Time = double>
 using DeltaExternalFn = std::function<S(const S&, const Time&, const X&)>;
 
 template <typename S> using DeltaInternalFn = std::function<S(const S&)>;
 
 template <typename Y, typename S> using OutFn = std::function<Y(const S&)>;
 
-template <typename S, typename Time> using TimeAdvanceFn = std::function<Time(const S&)>;
+template <typename S, typename Time = double> using TimeAdvanceFn = std::function<Time(const S&)>;
 
 template <typename X, typename Y, typename S, typename Time = double> class Atomic {
     S s;
@@ -48,7 +49,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Atom
 
 namespace Sim {
 
-template <typename Time> class Event {
+template <typename Time = double> class Event {
 
   public: // aliases
     using Action = std::function<void()>;
@@ -76,21 +77,23 @@ template <typename Time> class Event {
 
     auto time() const { return time_; }
 
+    auto action() const { action_(); }
+
   private: // members
     Time time_;
     Action action_;
     std::shared_ptr<bool> cancelled_;
 };
 
-template <typename Time> class EventSorter {
+template <typename Time = double> class EventSorter {
   public:
     bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time() > r.time(); }
 };
 
-template <typename Time>
+template <typename Time = double>
 using CalendarBase = std::priority_queue<Event<Time>, std::vector<Event<Time>>, EventSorter<Time>>;
 
-template <typename Time> class Calendar : public CalendarBase<Time> {
+template <typename Time = double> class Calendar : public CalendarBase<Time> {
 
   public: // ctors, dtor
     explicit Calendar() : CalendarBase<Time>{EventSorter<Time>{}} {}
@@ -114,13 +117,46 @@ template <typename Time> class Calendar : public CalendarBase<Time> {
         return s.str();
     }
 
-    auto next() {} // TODO continue here
+    std::optional<Event<Time>> next() {
+
+        // ignore cancelled events
+        while (!this->empty() && this->top().is_cancelled()) {
+            this->pop();
+        }
+
+        if (this->empty()) {
+            return {};
+        }
+        const auto event = this->top();
+        this->pop();
+        return event;
+    }
+};
+
+template <typename Time = double> class Printer {
+
+  public: // ctors, dtor
+    explicit Printer(std::ostream& stream = std::cout) : s_{stream} {}
+
+  public: // methods
+    auto on_start(const Time time) { s_ << "[T = " << time << "] Starting simulation...\n"; }
+    auto on_end(const Time time) { s_ << "[T = " << time << "] Finished simulation\n"; }
+    auto on_time_advance(const Time prev, const Time next) {
+        s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
+    }
+
+    auto on_event_execution(const Event<Time>& event) {
+        s_ << "[T = " << event.time() << "] Executing event " << event.to_string() << "\n";
+    }
+
+  private: // members
+    std::ostream& s_;
 };
 
 template <typename Time = double> class Simulator {
 
   public: // ctors, dtor
-    explicit Simulator() : time_{}, calendar_{} {}
+    explicit Simulator(const Printer<Time> printer = Printer<Time>{}) : time_{}, calendar_{}, printer_{printer} {}
 
   public: // methods
     auto to_string() const {
@@ -132,21 +168,19 @@ template <typename Time = double> class Simulator {
     auto schedule_event(const Event<Time> event) { calendar_.push(event); }
 
     auto run() {
-        std::cout << "[T = 0] Starting simulation...\n";
 
-        while (!calendar_.empty()) {
-            // TODO
-            // const auto event = calendar.top();
-            // advance_time(event.time, context);
-            // std::cout << "Advancing time to " << event.time << "\n";
-            // std::cout << "Executing event action ...\n";
-            // event.action();
-            // context.calendar.pop();
+        printer_.on_start(time_);
+
+        std::optional<Event<Time>> event{};
+
+        while (event = calendar_.next()) {
+            printer_.on_time_advance(time_, event->time());
+            advance_time(event->time());
+            printer_.on_event_execution(*event);
+            event->action();
         }
 
-        std::cout << "[T = " << time_ << "] "
-                  << "Finished simulation"
-                  << "\n";
+        printer_.on_end(time_);
     }
 
   private: // methods
@@ -155,6 +189,7 @@ template <typename Time = double> class Simulator {
   private: // members
     Time time_;
     Calendar<Time> calendar_;
+    Printer<Time> printer_;
 };
 } // namespace Sim
 } // namespace Devs
