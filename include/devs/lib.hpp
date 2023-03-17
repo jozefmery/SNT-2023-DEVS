@@ -37,6 +37,8 @@ template <typename X, typename Y, typename S, typename Time = double> class Atom
         : s_{initial_state}, delta_external_{delta_external}, delta_internal_{delta_internal}, out_{out}, ta_{ta} {}
 
   public: // methods
+    auto state() const { return s_; }
+
     auto time_advance() { return ta_(s_); }
 
     auto internal_transition() {
@@ -69,7 +71,7 @@ template <typename Time = double> class Event {
         : time_{time}, action_{action}, name_{name}, cancelled_{std::make_shared<bool>(false)} {}
 
   public: // methods
-    auto to_string(const bool omit_empty_name = true) const {
+    auto to_string(const bool omit_cancelled = false, const bool omit_empty_name = true) const {
         std::stringstream s;
         s << "Event{ time = " << time_;
 
@@ -77,8 +79,11 @@ template <typename Time = double> class Event {
             s << ", name = " << name_;
         }
 
-        s << std::boolalpha; // write boolean as true/false
-        s << ", cancelled = " << *cancelled_ << " }";
+        if (!omit_cancelled) {
+            s << std::boolalpha; // write boolean as true/false
+            s << ", cancelled = " << *cancelled_;
+        }
+        s << " }";
         return s.str();
     }
 
@@ -150,29 +155,37 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
     }
 };
 
-template <typename Time = double> class Printer {
+template <typename S, typename Time = double> class Printer {
 
   public: // ctors, dtor
     explicit Printer(std::ostream& stream = std::cout) : s_{stream} {}
+
+  public: // static functions
+    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Printer<S, Time>>(stream); }
 
   public: // methods
     virtual void on_start(const Time) {}
     virtual void on_end(const Time) {}
     virtual void on_time_advance(const Time, const Time) {}
     virtual void on_event_schedule(const Time, const Event<Time>&) {}
+    virtual void on_event_schedule_in_past(const Time, const Event<Time>&) {}
     virtual void on_event_execution(const Event<Time>&) {}
+    virtual void on_internal_transition(const Time, const S&, const S&) {}
 
   protected: // members
     std::ostream& s_;
 };
 
-template <typename Time = double> class VerbosePrinter : public Printer<Time> {
+template <typename S, typename Time = double> class VerbosePrinter : public Printer<S, Time> {
 
   public: // ctors, dtor
-    explicit VerbosePrinter(std::ostream& stream = std::cout) : Printer<Time>{stream} {}
+    explicit VerbosePrinter(std::ostream& stream = std::cout) : Printer<S, Time>{stream} {}
+
+  public: // static functions
+    static auto create(std::ostream& stream = std::cout) { return std::make_unique<VerbosePrinter<S, Time>>(stream); }
 
   public: // methods
-    void on_start(const Time time) override { this->s_ << "[T = " << time << "] Starting simulation...\n"; }
+    void on_start(const Time time) override { this->s_ << "[T = " << time << "] Starting simulation\n"; }
     void on_end(const Time time) override { this->s_ << "[T = " << time << "] Finished simulation\n"; }
     void on_time_advance(const Time prev, const Time next) override {
         this->s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
@@ -180,18 +193,27 @@ template <typename Time = double> class VerbosePrinter : public Printer<Time> {
     void on_event_schedule(const Time time, const Event<Time>& event) override {
         this->s_ << "[T = " << time << "] Scheduling event: " << event.to_string() << "\n";
     }
+    void on_event_schedule_in_past(const Time time, const Event<Time>& event) override {
+        this->s_ << "[T = " << time << "] ERROR: Attempted to schedule event in the past: " << event.to_string()
+                 << "\n";
+    }
     void on_event_execution(const Event<Time>& event) override {
         this->s_ << "[T = " << event.time() << "] Executing action of event: " << event.to_string() << "\n";
+    }
+    void on_internal_transition(const Time time, const S& prev, const S& next) override {
+        this->s_ << "[T = " << time << "] Internal state transition from " << prev << " to " << next << "\n";
     }
 };
 
 template <typename X, typename Y, typename S, typename Time = double> class Simulator {
 
   public: // ctors, dtor
-    explicit Simulator(const Devs::Model::Atomic<X, Y, S, Time> model, const Time end_time,
-                       std::unique_ptr<Printer<Time>> printer = std::make_unique<VerbosePrinter<Time>>())
-        : time_{}, end_time_{end_time}, model_{model}, calendar_{}, printer_{std::move(printer)},
-          cancel_internal_transition_{} {}
+    explicit Simulator(const Devs::Model::Atomic<X, Y, S, Time> model,
+                       const std::vector<std::function<void(const Y&)>> output_listeners, const Time start_time,
+                       const Time end_time,
+                       std::unique_ptr<Printer<S, Time>> printer = VerbosePrinter<S, Time>::create())
+        : time_{start_time}, end_time_{end_time}, model_{model}, output_listeners_{output_listeners}, calendar_{},
+          printer_{std::move(printer)}, cancel_internal_transition_{} {}
 
   public: // methods
     auto to_string() const {
@@ -201,7 +223,10 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
     auto schedule_event(const Event<Time> event) {
-        // TODO handle event scheduled in the past
+        if (event.time() < time_) {
+            printer_->on_event_schedule_in_past(time_, event);
+            return;
+        }
         printer_->on_event_schedule(time_, event);
         calendar_.schedule_event(event);
     }
@@ -231,12 +256,23 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
   private: // methods
+    void invoke_output_listeners(const Y& out) const {
+        for (const auto listener : output_listeners_) {
+            listener(out);
+        }
+    }
+
     void schedule_internal_transition() {
         const auto time = model_.time_advance();
         auto event = Event<Time>{time,
                                  [this]() {
-                                     // TODO save output
+                                     const auto prev = model_.state();
                                      const auto out = model_.internal_transition();
+                                     const auto next = model_.state();
+
+                                     invoke_output_listeners(out);
+
+                                     printer_->on_internal_transition(time_, prev, next);
                                      schedule_internal_transition();
                                  },
                                  "internal transition"};
@@ -253,8 +289,9 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     Time time_;
     Time end_time_;
     Devs::Model::Atomic<X, Y, S, Time> model_;
+    std::vector<std::function<void(const Y&)>> output_listeners_;
     Calendar<Time> calendar_;
-    std::unique_ptr<Printer<Time>> printer_;
+    std::unique_ptr<Printer<S, Time>> printer_;
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
 } // namespace Sim
