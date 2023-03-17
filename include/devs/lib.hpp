@@ -42,6 +42,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Atom
     auto time_advance() { return ta_(s_); }
 
     auto internal_transition() {
+        // get output from current state
         const auto out = out_(s_);
         s_ = delta_internal_(s_);
         return out;
@@ -90,6 +91,8 @@ template <typename Time = double> class Event {
     auto is_cancelled() const { return *cancelled_; }
 
     auto get_cancel_callback() const {
+        // allow cancelling "remotely"
+        // use a shared pointer for proper cancelling even if the object is moved around
         auto copy = cancelled_;
         return [copy]() { *copy = true; };
     }
@@ -107,6 +110,7 @@ template <typename Time = double> class Event {
 
 template <typename Time = double> class EventSorter {
   public:
+    // a sooner event should get priority, FIFO otherwise
     bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time() > r.time(); }
 };
 
@@ -120,7 +124,7 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
 
   public: // methods
     auto to_string() const {
-        // pass calendar as value as items are deleted when traversing
+        // create queue copy as items are deleted when traversing
         auto copy = *this;
 
         std::stringstream s;
@@ -137,6 +141,7 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
         return s.str();
     }
 
+    // using this-> is required for accesing base class methods in this case
     auto schedule_event(const Event<Time> event) { this->push(event); }
 
     std::optional<Event<Time>> next() {
@@ -149,6 +154,7 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
         if (this->empty()) {
             return {};
         }
+        // save event as pop does not return removed element, return later
         const auto event = this->top();
         this->pop();
         return event;
@@ -171,6 +177,7 @@ template <typename S, typename Time = double> class Printer {
     virtual void on_event_schedule_in_past(const Time, const Event<Time>&) {}
     virtual void on_event_execution(const Event<Time>&) {}
     virtual void on_internal_transition(const Time, const S&, const S&) {}
+    virtual void on_external_transition(const Time, const S&, const S&) {}
 
   protected: // members
     std::ostream& s_;
@@ -203,6 +210,9 @@ template <typename S, typename Time = double> class VerbosePrinter : public Prin
     void on_internal_transition(const Time time, const S& prev, const S& next) override {
         this->s_ << "[T = " << time << "] Internal state transition from " << prev << " to " << next << "\n";
     }
+    void on_external_transition(const Time time, const S& prev, const S& next) override {
+        this->s_ << "[T = " << time << "] External state transition from " << prev << " to " << next << "\n";
+    }
 };
 
 template <typename X, typename Y, typename S, typename Time = double> class Simulator {
@@ -212,8 +222,8 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
                        const std::vector<std::function<void(const Y&)>> output_listeners, const Time start_time,
                        const Time end_time,
                        std::unique_ptr<Printer<S, Time>> printer = VerbosePrinter<S, Time>::create())
-        : time_{start_time}, end_time_{end_time}, model_{model}, output_listeners_{output_listeners}, calendar_{},
-          printer_{std::move(printer)}, cancel_internal_transition_{} {}
+        : time_{start_time}, end_time_{end_time}, elapsed_{}, model_{model}, output_listeners_{output_listeners},
+          calendar_{}, printer_{std::move(printer)}, cancel_internal_transition_{} {}
 
   public: // methods
     auto to_string() const {
@@ -231,8 +241,10 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
         calendar_.schedule_event(event);
     }
 
-    auto schedule_model_input(const X input) {
+    auto schedule_model_input(const Time time, const X input) {
         // TODO
+        const auto event = Event{time, get_external_transition_action(time, input), "external transition"};
+        schedule_event(event);
     }
 
     auto run() {
@@ -256,38 +268,54 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
   private: // methods
-    void invoke_output_listeners(const Y& out) const {
+    auto invoke_output_listeners(const Y& out) const {
         for (const auto listener : output_listeners_) {
             listener(out);
         }
     }
 
+    auto get_external_transition_action(const Time time, const X input) {
+        // TODO
+        return [this, time, input]() {
+            if (cancel_internal_transition_) {
+                (*cancel_internal_transition_)();
+            }
+            const auto prev = model_.state();
+            const auto out = model_.external_transition(elapsed_, input);
+            const auto next = model_.state();
+            schedule_internal_transition();
+        };
+    }
+
+    auto get_internal_transition_action() {
+        return [this]() {
+            const auto prev = model_.state();
+            const auto out = model_.internal_transition();
+            const auto next = model_.state();
+
+            invoke_output_listeners(out);
+
+            printer_->on_internal_transition(time_, prev, next);
+            schedule_internal_transition();
+        };
+    }
+
     void schedule_internal_transition() {
-        const auto time = model_.time_advance();
-        auto event = Event<Time>{time,
-                                 [this]() {
-                                     const auto prev = model_.state();
-                                     const auto out = model_.internal_transition();
-                                     const auto next = model_.state();
-
-                                     invoke_output_listeners(out);
-
-                                     printer_->on_internal_transition(time_, prev, next);
-                                     schedule_internal_transition();
-                                 },
-                                 "internal transition"};
+        const auto event = Event<Time>{model_.time_advance(), get_internal_transition_action(), "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         schedule_event(event);
     }
 
     auto advance_time(const Time to) {
         printer_->on_time_advance(time_, to);
+        elapsed_ = to - time_;
         time_ = to;
     }
 
   private: // members
     Time time_;
     Time end_time_;
+    Time elapsed_;
     Devs::Model::Atomic<X, Y, S, Time> model_;
     std::vector<std::function<void(const Y&)>> output_listeners_;
     Calendar<Time> calendar_;
