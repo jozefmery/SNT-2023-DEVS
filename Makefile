@@ -41,7 +41,7 @@ CFLAGS      = -pedantic -Wextra -Wall $(PLATFORM)
 RELCFLAGS   = -O2 -s -DNDEBUG -flto
 DCFLAGS     = -g -O0
 STD         = c++17
-EXTRACFLAGS = -Werror
+# EXTRACFLAGS = -Werror
 
 # additional includes
 INCLUDES  = $(addprefix -I,)
@@ -55,7 +55,7 @@ LIBDIRS = $(addprefix -L, )
 
 default: release
 all: default
-.PHONY: default all clean run archive crun debug release format
+.PHONY: default all release debug run debug-run clean-run clean archive format
 
 RELDIR  = Release
 DDIR    = Debug
@@ -105,8 +105,12 @@ debug: $(BINDIR)/$(TARGET)_d
 run: release
 	@./$(BINDIR)/$(TARGET) $(ARGS)
 
+# run debug
+debug-run: debug
+	@./$(BINDIR)/$(TARGET)_d $(ARGS)
+
 # run with clear
-crun: release
+clean-run: release
 	@clear
 	@./$(BINDIR)/$(TARGET) $(ARGS)
 
