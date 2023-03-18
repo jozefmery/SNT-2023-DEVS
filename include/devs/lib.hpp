@@ -17,55 +17,10 @@
 // ---
 
 namespace Devs {
-
-// make sure infity/negative infinity works as expected
-// https://stackoverflow.com/a/20016972/5150211
-static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 required");
-static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required");
-// shortcuts
-constexpr auto fINF = std::numeric_limits<float>::infinity();
-constexpr auto INF = std::numeric_limits<double>::infinity();
-
-namespace Model {
-
-template <typename X, typename Y, typename S, typename Time = double> class Atomic {
-
-  public: // ctors, dtor
-    explicit Atomic(const S initial_state, const std::function<S(const S&, const Time&, const X&)> delta_external,
-                    const std::function<S(const S&)> delta_internal, const std::function<Y(const S&)> out,
-                    const std::function<Time(const S&)> ta)
-        : s_{initial_state}, delta_external_{delta_external}, delta_internal_{delta_internal}, out_{out}, ta_{ta} {}
-
-  public: // methods
-    auto state() const { return s_; }
-
-    auto time_advance() { return ta_(s_); }
-
-    auto internal_transition() {
-        // get output from current state
-        const auto out = out_(s_);
-        s_ = delta_internal_(s_);
-        return out;
-    }
-
-    auto external_transition(const Time elapsed, const X input) { s_ = delta_external_(s_, elapsed, input); }
-
-  private: // members
-    S s_;
-    std::function<S(const S&, const Time&, const X&)> delta_external_;
-    std::function<S(const S&)> delta_internal_;
-    std::function<Y(const S&)> out_;
-    std::function<Time(const S&)> ta_;
-};
-
-} // namespace Model
-
-namespace Sim {
-
-template <typename Time = double> class Event {
-
-  public: // aliases
-    using Action = std::function<void()>;
+//----------------------------------------------------------------------------------------------------------------------
+using Action = std::function<void()>;
+namespace _impl {
+template <typename Time> class Event {
 
   public: // ctors, dtor
     explicit Event(const Time time, const Action action, const std::string name = "")
@@ -91,7 +46,7 @@ template <typename Time = double> class Event {
     auto is_cancelled() const { return *cancelled_; }
 
     auto get_cancel_callback() const {
-        // allow cancelling "remotely"
+        // allow cancelling "remotely", as there is no sensible way to traverse a std::priority_queue
         // use a shared pointer for proper cancelling even if the object is moved around
         auto copy = cancelled_;
         return [copy]() { *copy = true; };
@@ -108,16 +63,16 @@ template <typename Time = double> class Event {
     std::shared_ptr<bool> cancelled_;
 };
 
-template <typename Time = double> class EventSorter {
+template <typename Time> class EventSorter {
   public:
     // a sooner event should get priority, FIFO otherwise
     bool operator()(const Event<Time>& l, const Event<Time>& r) { return l.time() > r.time(); }
 };
 
-template <typename Time = double>
+template <typename Time>
 using CalendarBase = std::priority_queue<Event<Time>, std::vector<Event<Time>>, EventSorter<Time>>;
 
-template <typename Time = double> class Calendar : public CalendarBase<Time> {
+template <typename Time> class Calendar : private CalendarBase<Time> {
 
   public: // ctors, dtor
     explicit Calendar() : CalendarBase<Time>{EventSorter<Time>{}} {}
@@ -160,22 +115,35 @@ template <typename Time = double> class Calendar : public CalendarBase<Time> {
         return event;
     }
 };
+} // namespace _impl
+//----------------------------------------------------------------------------------------------------------------------
+namespace Const {
 
-template <typename S, typename Time = double> class Printer {
+// make sure infity/negative infinity works as expected
+// https://stackoverflow.com/a/20016972/5150211
+static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 required");
+static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required");
+// shortcuts
+constexpr auto fINF = std::numeric_limits<float>::infinity();
+constexpr auto INF = std::numeric_limits<double>::infinity();
+} // namespace Const
+//----------------------------------------------------------------------------------------------------------------------
+namespace Printer {
+template <typename S, typename Time = double> class Base {
 
   public: // ctors, dtor
-    explicit Printer(std::ostream& stream = std::cout) : s_{stream} {}
+    explicit Base(std::ostream& stream = std::cout) : s_{stream} {}
 
   public: // static functions
-    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Printer<S, Time>>(stream); }
+    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Base<S, Time>>(stream); }
 
   public: // methods
     virtual void on_start(const Time) {}
     virtual void on_end(const Time) {}
     virtual void on_time_advance(const Time, const Time) {}
-    virtual void on_event_schedule(const Time, const Event<Time>&) {}
-    virtual void on_event_schedule_in_past(const Time, const Event<Time>&) {}
-    virtual void on_event_execution(const Event<Time>&) {}
+    virtual void on_event_schedule(const Time, const Devs::_impl::Event<Time>&) {}
+    virtual void on_event_schedule_in_past(const Time, const Devs::_impl::Event<Time>&) {}
+    virtual void on_event_execution(const Devs::_impl::Event<Time>&) {}
     virtual void on_internal_transition(const Time, const S&, const S&) {}
     virtual void on_external_transition(const Time, const S&, const S&) {}
 
@@ -183,13 +151,13 @@ template <typename S, typename Time = double> class Printer {
     std::ostream& s_;
 };
 
-template <typename S, typename Time = double> class VerbosePrinter : public Printer<S, Time> {
+template <typename S, typename Time = double> class Verbose : public Base<S, Time> {
 
   public: // ctors, dtor
-    explicit VerbosePrinter(std::ostream& stream = std::cout) : Printer<S, Time>{stream} {}
+    explicit Verbose(std::ostream& stream = std::cout) : Base<S, Time>{stream} {}
 
   public: // static functions
-    static auto create(std::ostream& stream = std::cout) { return std::make_unique<VerbosePrinter<S, Time>>(stream); }
+    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Verbose<S, Time>>(stream); }
 
   public: // methods
     void on_start(const Time time) override { this->s_ << "[T = " << time << "] Starting simulation\n"; }
@@ -197,14 +165,14 @@ template <typename S, typename Time = double> class VerbosePrinter : public Prin
     void on_time_advance(const Time prev, const Time next) override {
         this->s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
     }
-    void on_event_schedule(const Time time, const Event<Time>& event) override {
+    void on_event_schedule(const Time time, const Devs::_impl::Event<Time>& event) override {
         this->s_ << "[T = " << time << "] Scheduling event: " << event.to_string(true) << "\n";
     }
-    void on_event_schedule_in_past(const Time time, const Event<Time>& event) override {
+    void on_event_schedule_in_past(const Time time, const Devs::_impl::Event<Time>& event) override {
         this->s_ << "[T = " << time << "] ERROR: Attempted to schedule event in the past: " << event.to_string()
                  << "\n";
     }
-    void on_event_execution(const Event<Time>& event) override {
+    void on_event_execution(const Devs::_impl::Event<Time>& event) override {
         this->s_ << "[T = " << event.time() << "] Executing action of event: " << event.to_string(true) << "\n";
     }
     void on_internal_transition(const Time time, const S& prev, const S& next) override {
@@ -214,13 +182,44 @@ template <typename S, typename Time = double> class VerbosePrinter : public Prin
         this->s_ << "[T = " << time << "] External state transition from " << prev << " to " << next << "\n";
     }
 };
+} // namespace Printer
+//----------------------------------------------------------------------------------------------------------------------
+template <typename X, typename Y, typename S, typename Time = double> class Atomic {
+
+  public: // ctors, dtor
+    explicit Atomic(const S initial_state, const std::function<S(const S&, const Time&, const X&)> delta_external,
+                    const std::function<S(const S&)> delta_internal, const std::function<Y(const S&)> out,
+                    const std::function<Time(const S&)> ta)
+        : s_{initial_state}, delta_external_{delta_external}, delta_internal_{delta_internal}, out_{out}, ta_{ta} {}
+
+  public: // methods
+    auto state() const { return s_; }
+
+    auto time_advance() { return ta_(s_); }
+
+    auto internal_transition() {
+        // get output from current state
+        const auto out = out_(s_);
+        s_ = delta_internal_(s_);
+        return out;
+    }
+
+    auto external_transition(const Time elapsed, const X input) { s_ = delta_external_(s_, elapsed, input); }
+
+  private: // members
+    S s_;
+    std::function<S(const S&, const Time&, const X&)> delta_external_;
+    std::function<S(const S&)> delta_internal_;
+    std::function<Y(const S&)> out_;
+    std::function<Time(const S&)> ta_;
+};
 
 template <typename X, typename Y, typename S, typename Time = double> class Simulator {
   public: // ctors, dtor
-    explicit Simulator(const Devs::Model::Atomic<X, Y, S, Time> model,
+    explicit Simulator(const Devs::Atomic<X, Y, S, Time> model,
                        const std::vector<std::function<void(const Y&)>> output_listeners, const Time start_time,
                        const Time end_time,
-                       std::unique_ptr<Printer<S, Time>> printer = VerbosePrinter<S, Time>::create())
+                       std::unique_ptr<Printer::Base<S, Time>> printer = Printer::Verbose<S, Time>::create())
         : time_{start_time}, end_time_{end_time}, elapsed_{}, model_{model}, output_listeners_{output_listeners},
           calendar_{}, printer_{std::move(printer)}, cancel_internal_transition_{} {}
 
@@ -231,7 +230,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
         return s.str();
     }
 
-    auto schedule_event(const Event<Time> event) {
+    auto schedule_event(const Devs::_impl::Event<Time> event) {
         if (event.time() < time_) {
             printer_->on_event_schedule_in_past(time_, event);
             return;
@@ -241,13 +240,14 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
     auto schedule_model_input(const Time time, const X input) {
-        const auto event = Event{time, get_external_transition_action(time, input), "external input"};
+        const auto event =
+            Devs::_impl::Event<Time>{time, get_external_transition_action(time, input), "external input"};
         schedule_event(event);
     }
 
     auto run() {
 
-        std::optional<Event<Time>> event{};
+        std::optional<Devs::_impl::Event<Time>> event{};
         printer_->on_start(time_);
 
         schedule_internal_transition();
@@ -299,7 +299,8 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
     void schedule_internal_transition() {
-        const auto event = Event<Time>{model_.time_advance(), get_internal_transition_action(), "internal transition"};
+        const auto event =
+            Devs::_impl::Event<Time>{model_.time_advance(), get_internal_transition_action(), "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         schedule_event(event);
     }
@@ -314,11 +315,11 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     Time time_;
     Time end_time_;
     Time elapsed_;
-    Devs::Model::Atomic<X, Y, S, Time> model_;
+    Devs::Atomic<X, Y, S, Time> model_;
     std::vector<std::function<void(const Y&)>> output_listeners_;
-    Calendar<Time> calendar_;
-    std::unique_ptr<Printer<S, Time>> printer_;
+    Devs::_impl::Calendar<Time> calendar_;
+    std::unique_ptr<Printer::Base<S, Time>> printer_;
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
-} // namespace Sim
+//----------------------------------------------------------------------------------------------------------------------
 } // namespace Devs
