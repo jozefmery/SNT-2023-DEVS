@@ -198,14 +198,14 @@ template <typename S, typename Time = double> class VerbosePrinter : public Prin
         this->s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
     }
     void on_event_schedule(const Time time, const Event<Time>& event) override {
-        this->s_ << "[T = " << time << "] Scheduling event: " << event.to_string() << "\n";
+        this->s_ << "[T = " << time << "] Scheduling event: " << event.to_string(true) << "\n";
     }
     void on_event_schedule_in_past(const Time time, const Event<Time>& event) override {
         this->s_ << "[T = " << time << "] ERROR: Attempted to schedule event in the past: " << event.to_string()
                  << "\n";
     }
     void on_event_execution(const Event<Time>& event) override {
-        this->s_ << "[T = " << event.time() << "] Executing action of event: " << event.to_string() << "\n";
+        this->s_ << "[T = " << event.time() << "] Executing action of event: " << event.to_string(true) << "\n";
     }
     void on_internal_transition(const Time time, const S& prev, const S& next) override {
         this->s_ << "[T = " << time << "] Internal state transition from " << prev << " to " << next << "\n";
@@ -216,7 +216,6 @@ template <typename S, typename Time = double> class VerbosePrinter : public Prin
 };
 
 template <typename X, typename Y, typename S, typename Time = double> class Simulator {
-
   public: // ctors, dtor
     explicit Simulator(const Devs::Model::Atomic<X, Y, S, Time> model,
                        const std::vector<std::function<void(const Y&)>> output_listeners, const Time start_time,
@@ -242,8 +241,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
     auto schedule_model_input(const Time time, const X input) {
-        // TODO
-        const auto event = Event{time, get_external_transition_action(time, input), "external transition"};
+        const auto event = Event{time, get_external_transition_action(time, input), "external input"};
         schedule_event(event);
     }
 
@@ -256,10 +254,10 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
 
         while (event = calendar_.next()) {
             if (event->time() > end_time_) {
-                advance_time(end_time_);
+                time_advance(end_time_);
                 break;
             }
-            advance_time(event->time());
+            time_advance(event->time());
             printer_->on_event_execution(*event);
             event->action();
         }
@@ -275,14 +273,14 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
     auto get_external_transition_action(const Time time, const X input) {
-        // TODO
         return [this, time, input]() {
             if (cancel_internal_transition_) {
                 (*cancel_internal_transition_)();
             }
             const auto prev = model_.state();
-            const auto out = model_.external_transition(elapsed_, input);
+            model_.external_transition(elapsed_, input);
             const auto next = model_.state();
+            printer_->on_external_transition(time_, prev, next);
             schedule_internal_transition();
         };
     }
@@ -306,7 +304,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
         schedule_event(event);
     }
 
-    auto advance_time(const Time to) {
+    auto time_advance(const Time to) {
         printer_->on_time_advance(time_, to);
         elapsed_ = to - time_;
         time_ = to;
