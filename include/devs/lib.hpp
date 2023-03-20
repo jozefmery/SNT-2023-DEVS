@@ -4,8 +4,9 @@
  *  Date:       11.03.2023
  */
 #pragma once
-// --- standard includes -----------------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------------------------
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -101,9 +102,9 @@ using CalendarBase = std::priority_queue<Event<Time>, std::vector<Event<Time>>, 
 template <typename Time> class Calendar : private CalendarBase<Time> {
 
   public: // ctors, dtor
-    explicit Calendar(const Time& start_time)
-        : CalendarBase<Time>{EventSorter<Time>{}}, time_{start_time}, time_advanced_listeners_{},
-          event_scheduled_listeners_{} {}
+    explicit Calendar(const Time start_time, const Time end_time)
+        : CalendarBase<Time>{EventSorter<Time>{}}, time_{start_time}, end_time_{end_time}, time_advanced_listeners_{},
+          event_scheduled_listeners_{}, event_action_executed_listeners_{} {}
 
   public: // methods
     auto& time() const { return time_; }
@@ -139,6 +140,39 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         invoke_listeners<const Time&, const Event<Time>&>(event_scheduled_listeners_, time(), event);
     }
 
+    // returns whether an event has actually been executed
+    bool execute_next() {
+
+        const auto event = next();
+
+        if (!event) {
+            return false;
+        }
+
+        if (event->time() > end_time_) {
+            // always finish at the ending time
+            advance_time(end_time_);
+            return false;
+        }
+
+        advance_time(event->time());
+        execute_event_action(*event);
+        return true;
+    }
+
+    auto add_time_advanced_listener(const Listener<const Time&, const Time&> listener) {
+        time_advanced_listeners_.push_back(listener);
+    }
+
+    auto add_event_scheduled_listener(const Listener<const Time&, const Event<Time>&> listener) {
+        event_scheduled_listeners_.push_back(listener);
+    }
+
+    auto add_event_action_executed_listeners_(const Listener<const Time&, const Event<Time>&> listener) {
+        event_action_executed_listeners_.push_back(listener);
+    }
+
+  private: // methods
     std::optional<Event<Time>> next() {
 
         // ignore cancelled events
@@ -152,18 +186,14 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         // save event as pop does not return removed element, return later
         const auto event = this->top();
         this->pop();
-        advance_time(event.time());
         return event;
     }
 
-    auto add_time_advanced_listener(const Listener<const Time&, const Time&> listener) {
-        time_advanced_listeners_.push_back(listener);
-    }
-    auto add_event_scheduled_listener(const Listener<const Time&, const Event<Time>&> listener) {
-        event_scheduled_listeners_.push_back(listener);
+    auto execute_event_action(const Event<Time>& event) {
+        event.action();
+        invoke_listeners<const Time&, const Event<Time>&>(event_action_executed_listeners_, time(), event);
     }
 
-  private: // methods
     auto advance_time(const Time& time) {
         invoke_listeners<const Time&, const Time&>(time_advanced_listeners_, time_, time);
         time_ = time;
@@ -171,8 +201,10 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 
   private: // members
     Time time_;
+    Time end_time_;
     Listeners<const Time&, const Time&> time_advanced_listeners_;
     Listeners<const Time&, const Event<Time>&> event_scheduled_listeners_;
+    Listeners<const Time&, const Event<Time>&> event_action_executed_listeners_;
 };
 
 template <typename X, typename Y, typename Time> class IOModel {
@@ -222,7 +254,6 @@ template <typename X, typename Y, typename Time> class IOModel {
     Listeners<const std::string&, const Time&, const Y&> output_listeners_;
 };
 
-// TODO
 template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<X, Y, Time> {
 
   public: // ctors, dtor
@@ -266,10 +297,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
 
     auto get_internal_transition_action() {
         return [this]() {
-            // const auto prev = state();
             const auto out = internal_transition();
             this->output(out);
-            // const auto next = state();
 
             schedule_internal_transition();
             update_time(this->calendar_time());
@@ -288,9 +317,7 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
             (*cancel_internal_transition_)();
         }
 
-        // const auto prev = model_.state();
         external_transition(elapsed_since_last_transition(), input);
-        // const auto next = model_.state();
         schedule_internal_transition();
         update_time(this->calendar_time());
     }
@@ -335,15 +362,16 @@ template <typename S, typename Time = double> class Base {
 
   public: // methods
     // sim
-    virtual void on_sim_start(const Time) {}
-    virtual void on_sim_end(const Time) {}
+    virtual void on_sim_start(const Time&) {
+        // cannot use auto return type on virtual methods
+    }
+    virtual void on_sim_end(const Time&) {}
     // calendar/events
-    virtual void on_time_advanced(const Time, const Time) {}
-    virtual void on_event_schedule(const Time, const Devs::_impl::Event<Time>&) {}
-    virtual void on_event_execution(const Devs::_impl::Event<Time>&) {}
+    virtual void on_time_advanced(const Time&, const Time&) {}
+    virtual void on_event_scheduled(const Time&, const Devs::_impl::Event<Time>&) {}
+    virtual void on_event_action_executed(const Time&, const Devs::_impl::Event<Time>&) {}
     // model
-    virtual void on_internal_transition(const Time, const S&, const S&) {}
-    virtual void on_external_transition(const Time, const S&, const S&) {}
+    virtual void on_model_state_transition(const std::string&, const Time&, const S&, const S&) {}
 
   protected: // members
     std::ostream& s_;
@@ -357,29 +385,32 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
   public: // static functions
     static auto create(std::ostream& stream = std::cout) { return std::make_unique<Verbose<S, Time>>(stream); }
 
-  public
-      : // methods
-        // void on_start(const Time time) override { this->s_ << "[T = " << time << "] Starting simulation\n"; }
-        // void on_end(const Time time) override { this->s_ << "[T = " << time << "] Finished simulation\n"; }
-        // void on_time_advance(const Time prev, const Time next) override {
-        //     this->s_ << "[T = " << prev << "] Advancing time to " << next << "\n";
-        // }
-        // void on_event_schedule(const Time time, const Devs::_impl::Event<Time>& event) override {
-        //     this->s_ << "[T = " << time << "] Scheduling event: " << event.to_string(true) << "\n";
-        // }
-        // void on_event_schedule_in_past(const Time time, const Devs::_impl::Event<Time>& event) override {
-        //     this->s_ << "[T = " << time << "] ERROR: Attempted to schedule event in the past: " << event.to_string()
-        //              << "\n";
-        // }
-        // void on_event_execution(const Devs::_impl::Event<Time>& event) override {
-        //     this->s_ << "[T = " << event.time() << "] Executing action of event: " << event.to_string(true) << "\n";
-        // }
-        // void on_internal_transition(const Time time, const S& prev, const S& next) override {
-        //     this->s_ << "[T = " << time << "] Internal state transition from " << prev << " to " << next << "\n";
-        // }
-        // void on_external_transition(const Time time, const S& prev, const S& next) override {
-        //     this->s_ << "[T = " << time << "] External state transition from " << prev << " to " << next << "\n";
-        // }
+  public: // methods
+    // sim
+    void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
+    void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
+    // calendar/event
+    void on_time_advanced(const Time& prev, const Time& next) override {
+        this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
+    }
+    // model
+    void on_model_state_transition(const std::string& name, const Time& time, const S& prev, const S& next) override {
+        this->s_ << prefix(time) << "Model " << name << ": " << prev << " -> " << next << "\n";
+    }
+
+  private: // methods
+    auto prefix(const Time& time) {
+        std::stringstream s;
+        s << "[T = " << format_time(time) << "] ";
+        return s.str();
+    }
+
+    auto format_time(const Time& time) {
+        std::stringstream s;
+        s << std::fixed << std::setprecision(1);
+        s << time;
+        return s.str();
+    }
 };
 } // namespace Printer
 //----------------------------------------------------------------------------------------------------------------------
@@ -387,38 +418,24 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
   public: // ctors, dtor
     explicit Simulator(const Devs::Atomic<X, Y, S, Time> model, const Time start_time, const Time end_time,
                        std::unique_ptr<Printer::Base<S, Time>> printer = Printer::Verbose<S, Time>::create())
-        : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time)}, end_time_{end_time},
-          model_{Devs::_impl::AtomicImpl<X, Y, S, Time>{"test", p_calendar_.get(), model}},
-          p_printer_{std::move(printer)} {}
-
-  public: // methods
-    // auto to_string() const {
-    //     std::stringstream s;
-    //     s << "Simulator{ time = " << time_ << ", calendar = " << calendar_.to_string() << " }";
-    //     return s.str();
-    // }
-
-    auto schedule_model_input(const Time time, const X input) {
-        const auto event =
-            Devs::_impl::Event<Time>{time, get_external_transition_action(time, input), "external input"};
-        schedule_event(event);
+        : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
+          model_{Devs::_impl::AtomicImpl<X, Y, S, Time>{"test", p_calendar_.get(), model}}, // tODO remove test
+          p_printer_{std::move(printer)} {
+        p_calendar_->add_time_advanced_listener(
+            [this](const Time& prev, const Time& next) { p_printer_->on_time_advanced(prev, next); });
+        // TODO add listeners
     }
 
+  public: // methods
     auto run() {
-
-        std::optional<Devs::_impl::Event<Time>> event{};
-
-        while (event = p_calendar_->next()) {
-            if (event->time() > end_time_) {
-                break;
-            }
-            event->action();
-        }
+        p_printer_->on_sim_start(p_calendar_->time());
+        while (p_calendar_->execute_next())
+            ;
+        p_printer_->on_sim_end(p_calendar_->time());
     }
 
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
-    Time end_time_;
     Devs::_impl::AtomicImpl<X, Y, S, Time> model_;
     std::unique_ptr<Devs::Printer::Base<S, Time>> p_printer_;
 };
