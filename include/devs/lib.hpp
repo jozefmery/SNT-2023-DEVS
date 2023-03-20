@@ -395,7 +395,7 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const S& prev, const S& next) override {
-        this->s_ << prefix(time) << "Model " << name << ": " << prev << " -> " << next << "\n";
+        this->s_ << prefix(time) << "Model " << name << " state: " << prev << " -> " << next << "\n";
     }
 
   private: // methods
@@ -419,10 +419,14 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     explicit Simulator(const Devs::Atomic<X, Y, S, Time> model, const Time start_time, const Time end_time,
                        std::unique_ptr<Printer::Base<S, Time>> printer = Printer::Verbose<S, Time>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
-          model_{Devs::_impl::AtomicImpl<X, Y, S, Time>{"test", p_calendar_.get(), model}}, // tODO remove test
+          model_{Devs::_impl::AtomicImpl<X, Y, S, Time>{"test", p_calendar_.get(), model}}, // TODO remove test
           p_printer_{std::move(printer)} {
         p_calendar_->add_time_advanced_listener(
             [this](const Time& prev, const Time& next) { p_printer_->on_time_advanced(prev, next); });
+        model_.add_state_transition_listener(
+            [this](const std::string& name, const Time& time, const S& prev, const S& next) {
+                p_printer_->on_model_state_transition(name, time, prev, next);
+            });
         // TODO add listeners
     }
 
