@@ -41,6 +41,47 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
 };
 //----------------------------------------------------------------------------------------------------------------------
 namespace _impl {
+
+template <typename T> class Box;
+
+class IBox {
+
+  public: // ctors, dtor
+    // make class polymorphic
+    virtual ~IBox() = default;
+
+  public: // static functions
+    template <typename T> static T get(const IBox& box) { return (dynamic_cast<const Box<T>&>(box)).value(); }
+};
+
+template <typename T> class Box : public IBox {
+
+  public: // ctors, dtor
+    Box(const T value) : value_{value} {}
+
+  public: // static functions
+    static std::shared_ptr<IBox> create(const T value) { return std::make_shared<Box<T>>(value); }
+
+  public: // methods
+    T value() const { return value_; }
+
+  private: // members
+    T value_;
+};
+} // namespace _impl
+
+class Dynamic {
+  public: // ctors, dtor
+    template <typename T> Dynamic(const T value) : p_box_{Devs::_impl::Box<T>::create(value)} {}
+
+  public: // methods
+    template <typename T> T get() const { return Devs::_impl::IBox::get<T>(*p_box_); }
+
+  private: // members
+    std::shared_ptr<Devs::_impl::IBox> p_box_;
+};
+//----------------------------------------------------------------------------------------------------------------------
+namespace _impl {
 template <typename Time> class Event {
 
   public: // ctors, dtor
@@ -48,34 +89,36 @@ template <typename Time> class Event {
         : time_{time}, action_{action}, description_{description}, cancelled_{std::make_shared<bool>(false)} {}
 
   public: // methods
-    auto to_string(const bool description = true, const bool cancelled = false) const {
+    std::string to_string(const bool with_description = true, const bool with_cancelled = false) const {
         std::stringstream s;
-        s << "Event{ time = " << time_;
+        s << "Event{ time = " << time();
 
-        if (description) {
-            s << ", description = " << description_;
+        if (with_description) {
+            s << ", description = " << description();
         }
 
-        if (cancelled) {
+        if (with_cancelled) {
             s << std::boolalpha; // write boolean as true/false
-            s << ", cancelled = " << *cancelled_;
+            s << ", cancelled = " << is_cancelled();
         }
         s << " }";
         return s.str();
     }
 
-    auto is_cancelled() const { return *cancelled_; }
+    const std::string& description() const { return description_; }
 
-    auto get_cancel_callback() const {
+    bool is_cancelled() const { return *cancelled_; }
+
+    std::function<void()> get_cancel_callback() const {
         // allow cancelling "remotely", as there is no sensible way to traverse a std::priority_queue
         // use a shared pointer for proper cancelling even if the object is moved around
         auto copy = cancelled_;
         return [copy]() { *copy = true; };
     }
 
-    auto time() const { return time_; }
+    const Time& time() const { return time_; }
 
-    auto action() const { action_(); }
+    void action() const { action_(); }
 
   private: // members
     Time time_;
@@ -107,9 +150,9 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
           event_scheduled_listeners_{}, event_action_executed_listeners_{} {}
 
   public: // methods
-    auto& time() const { return time_; }
+    const Time& time() const { return time_; }
 
-    auto to_string() const {
+    std::string to_string() const {
         // create queue copy as items are deleted when traversing
         auto copy = *this;
 
@@ -127,11 +170,11 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         return s.str();
     }
 
-    auto schedule_event(const Event<Time> event) {
+    void schedule_event(const Event<Time> event) {
         if (event.time() < time()) {
             std::stringstream s;
-            s << "Attempted to schedule an event (" << event.to_string(true)
-              << ") in the past (current time: " << time() << ")";
+            s << "Attempted to schedule an event (" << event.to_string() << ") in the past (current time: " << time()
+              << ")";
             throw std::runtime_error(s.str());
         }
 
@@ -160,15 +203,15 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         return true;
     }
 
-    auto add_time_advanced_listener(const Listener<const Time&, const Time&> listener) {
+    void add_time_advanced_listener(const Listener<const Time&, const Time&> listener) {
         time_advanced_listeners_.push_back(listener);
     }
 
-    auto add_event_scheduled_listener(const Listener<const Time&, const Event<Time>&> listener) {
+    void add_event_scheduled_listener(const Listener<const Time&, const Event<Time>&> listener) {
         event_scheduled_listeners_.push_back(listener);
     }
 
-    auto add_event_action_executed_listeners_(const Listener<const Time&, const Event<Time>&> listener) {
+    void add_event_action_executed_listeners_(const Listener<const Time&, const Event<Time>&> listener) {
         event_action_executed_listeners_.push_back(listener);
     }
 
@@ -189,12 +232,12 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         return event;
     }
 
-    auto execute_event_action(const Event<Time>& event) {
+    void execute_event_action(const Event<Time>& event) {
         event.action();
         invoke_listeners<const Time&, const Event<Time>&>(event_action_executed_listeners_, time(), event);
     }
 
-    auto advance_time(const Time& time) {
+    void advance_time(const Time& time) {
         invoke_listeners<const Time&, const Time&>(time_advanced_listeners_, time_, time);
         time_ = time;
     }
@@ -207,7 +250,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     Listeners<const Time&, const Event<Time>&> event_action_executed_listeners_;
 };
 
-template <typename X, typename Y, typename Time> class IOModel {
+template <typename Time> class IOModel {
 
   public: // ctors, dtor
     explicit IOModel(const std::string name, Calendar<Time>* p_calendar)
@@ -218,69 +261,70 @@ template <typename X, typename Y, typename Time> class IOModel {
     }
 
   public: // methods
-    auto& name() const { return name_; }
+    const std::string& name() const { return name_; }
 
-    auto add_output_listener(const Listener<const std::string&, const Time&, const Y&> listener) {
+    void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
         output_listeners_.push_back(listener);
     }
 
-    auto input(const Time& time, const X value) const {
-        // TODO event description
+    void input(const Time& time, const Dynamic& value) const {
         schedule_event(Event<Time>{time,
                                    [this, value]() {
-                                       invoke_listeners<const std::string&, const Time&, const X&>(
+                                       invoke_listeners<const std::string&, const Time&, const Dynamic>(
                                            input_listeners_, name(), calendar_time(), value);
                                    },
-                                   ""});
+                                   "input"});
     }
 
-    auto schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
+    void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
 
   protected: // methods
-    auto calendar_time() const { return p_calendar_->time(); }
+    const Time& calendar_time() const { return p_calendar_->time(); }
 
-    auto add_input_listener(const Listener<const std::string&, const Time&, const X&> listener) {
+    void add_input_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
         input_listeners_.push_back(listener);
     }
 
-    auto output(const Y& value) const {
-        invoke_listeners<const std::string&, const Time&, const Y&>(output_listeners_, name(), calendar_time(), value);
+    void output(const Dynamic& value) const {
+        invoke_listeners<const std::string&, const Time&, const Dynamic&>(output_listeners_, name(), calendar_time(),
+                                                                          value);
     }
 
   private: // members
     std::string name_;
     Calendar<Time>* p_calendar_;
-    Listeners<const std::string&, const Time&, const X&> input_listeners_;
-    Listeners<const std::string&, const Time&, const Y&> output_listeners_;
+    Listeners<const std::string&, const Time&, const Dynamic&> input_listeners_;
+    Listeners<const std::string&, const Time&, const Dynamic&> output_listeners_;
 };
 
-template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<X, Y, Time> {
+template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<Time> {
 
   public: // ctors, dtor
     AtomicImpl(const std::string name, Calendar<Time>* p_calendar, const Devs::Atomic<X, Y, S, Time> model)
-        : IOModel<X, Y, Time>{name, p_calendar}, model_{model}, last_transition_time_{}, state_transition_listeners_{},
+        : IOModel<Time>{name, p_calendar}, model_{model}, last_transition_time_{}, state_transition_listeners_{},
           cancel_internal_transition_{} {
-        this->add_input_listener([this](const std::string&, const Time&, const X& input) { input_listener(input); });
+        this->add_input_listener(
+            [this](const std::string&, const Time&, const Dynamic& input) { dynamic_input_listener(input); });
         schedule_internal_transition();
     }
 
   public: // methods
-    auto add_state_transition_listener(const Listener<const std::string&, const Time&, const S&, const S&> listener) {
+    void add_state_transition_listener(const Listener<const std::string&, const Time&, const S&, const S&> listener) {
         state_transition_listeners_.push_back(listener);
     }
 
   private: // methods
-    auto state() const { return model_.s; }
+    const S& state() const { return model_.s; }
 
-    auto transition_state(const S state) {
+    void transition_state(const S state) {
         invoke_listeners<const std::string&, const Time&, const S&, const S&>(state_transition_listeners_, this->name(),
                                                                               this->calendar_time(), model_.s, state);
         model_.s = state;
     }
 
-    auto time_advance() const { return model_.ta(state()); }
+    Time time_advance() const { return model_.ta(state()); }
 
-    auto internal_transition() {
+    Y internal_transition() {
         // get output from current state
         const auto out = model_.out(state());
         const auto new_state = model_.delta_internal(state());
@@ -288,14 +332,14 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         return out;
     }
 
-    auto external_transition(const Time& elapsed, const X& input) {
+    void external_transition(const Time& elapsed, const X& input) {
         const auto new_state = model_.delta_external(state(), elapsed, input);
         transition_state(new_state);
     }
 
-    auto update_time(const Time& transition_time) { last_transition_time_ = transition_time; }
+    void update_time(const Time& transition_time) { last_transition_time_ = transition_time; }
 
-    auto get_internal_transition_action() {
+    std::function<void()> get_internal_transition_action() {
         return [this]() {
             const auto out = internal_transition();
             this->output(out);
@@ -306,13 +350,21 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
     void schedule_internal_transition() {
-        // TODO event description
-        const auto event = Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), ""};
+        const auto event =
+            Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         this->schedule_event(event);
     }
 
-    auto input_listener(const X& input) {
+    void dynamic_input_listener(const Dynamic& input) {
+        try {
+            input_listener(input.get<X>());
+        } catch (std::bad_cast&) {
+            // TODO error handling
+        }
+    }
+
+    void input_listener(const X& input) {
         if (cancel_internal_transition_) {
             (*cancel_internal_transition_)();
         }
@@ -322,7 +374,7 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         update_time(this->calendar_time());
     }
 
-    auto elapsed_since_last_transition() { return this->calendar_time() - last_transition_time_; }
+    Time elapsed_since_last_transition() { return this->calendar_time() - last_transition_time_; }
 
   private: // members
     Devs::Atomic<X, Y, S, Time> model_;
@@ -330,6 +382,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     Listeners<const std::string&, const Time&, const S&, const S&> state_transition_listeners_;
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
+
+using Influencers = std::unordered_map<std::string, std::vector<std::string>>;
 
 // TODO
 // class Compound : IOModel {
@@ -347,8 +401,8 @@ namespace Const {
 static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 required");
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required");
 // shortcuts
-constexpr auto fINF = std::numeric_limits<float>::infinity();
-constexpr auto INF = std::numeric_limits<double>::infinity();
+constexpr float fINF = std::numeric_limits<float>::infinity();
+constexpr double INF = std::numeric_limits<double>::infinity();
 } // namespace Const
 //----------------------------------------------------------------------------------------------------------------------
 namespace Printer {
@@ -357,14 +411,17 @@ template <typename S, typename Time = double> class Base {
   public: // ctors, dtor
     explicit Base(std::ostream& stream = std::cout) : s_{stream} {}
 
+    // polymorphic classes should always have a virtual destructor
+    virtual ~Base() = default;
+
   public: // static functions
-    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Base<S, Time>>(stream); }
+    static std::unique_ptr<Base<S, Time>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Base<S, Time>>(stream);
+    }
 
   public: // methods
     // sim
-    virtual void on_sim_start(const Time&) {
-        // cannot use auto return type on virtual methods
-    }
+    virtual void on_sim_start(const Time&) {}
     virtual void on_sim_end(const Time&) {}
     // calendar/events
     virtual void on_time_advanced(const Time&, const Time&) {}
@@ -383,7 +440,9 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
     explicit Verbose(std::ostream& stream = std::cout) : Base<S, Time>{stream} {}
 
   public: // static functions
-    static auto create(std::ostream& stream = std::cout) { return std::make_unique<Verbose<S, Time>>(stream); }
+    static std::unique_ptr<Verbose<S, Time>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Verbose<S, Time>>(stream);
+    }
 
   public: // methods
     // sim
@@ -399,13 +458,13 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
     }
 
   private: // methods
-    auto prefix(const Time& time) {
+    std::string prefix(const Time& time) {
         std::stringstream s;
         s << "[T = " << format_time(time) << "] ";
         return s.str();
     }
 
-    auto format_time(const Time& time) {
+    std::string format_time(const Time& time) {
         std::stringstream s;
         s << std::fixed << std::setprecision(1);
         s << time;
@@ -431,7 +490,7 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
   public: // methods
-    auto run() {
+    void run() {
         p_printer_->on_sim_start(p_calendar_->time());
         while (p_calendar_->execute_next())
             ;
