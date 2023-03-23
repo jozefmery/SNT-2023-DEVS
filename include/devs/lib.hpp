@@ -18,6 +18,15 @@
 #include <vector>
 //----------------------------------------------------------------------------------------------------------------------
 namespace Devs {
+namespace _impl { // declarations
+template <typename T> class Box;
+template <typename Time> class Calendar;
+template <typename Time> class IOModel;
+template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<Time> {
+  public: // ctors, dtor
+    explicit AtomicImpl(Calendar<Time>*, const Devs::Atomic<X, Y, S, Time>);
+};
+} // namespace _impl
 //----------------------------------------------------------------------------------------------------------------------
 using Action = std::function<void()>;
 template <typename... Args> using Listener = std::function<void(Args...)>;
@@ -26,23 +35,42 @@ template <typename... Args> using Listeners = std::vector<Listener<Args...>>;
 
 template <typename X, typename Y, typename S, typename Time = double> struct Atomic {
 
-  public: // ctors, dtor
-    explicit Atomic(const S initial_state, const std::function<S(const S&, const Time&, const X&)> delta_external,
-                    const std::function<S(const S&)> delta_internal, const std::function<Y(const S&)> out,
-                    const std::function<Time(const S&)> ta)
-        : s{initial_state}, delta_external{delta_external}, delta_internal{delta_internal}, out{out}, ta{ta} {}
+  public: // methods
+    operator std::function<std::unique_ptr<Devs::_impl::IOModel<Time>>(Calendar<Time>*)>() {
+        return [this](Calendar<Time>* p_calendar_) {
+            return std::make_unique<Devs::_impl::AtomicImpl<X, Y, S, Time>>(p_calendar_, *this);
+        }
+    }
 
   public: // members
+    std::string name;
     S s;
     std::function<S(const S&, const Time&, const X&)> delta_external;
     std::function<S(const S&)> delta_internal;
     std::function<Y(const S&)> out;
     std::function<Time(const S&)> ta;
 };
+
+using Influencers = std::unordered_map<std::string, std::vector<std::string>>;
+
+// TODO
+template <typename Time> struct Compound {
+  public: // ctors, dtor
+    Compound(const std::string name,
+             const std::vector<std::function<std::unique_ptr<Devs::_impl::IOModel<Time>>>> models,
+             const Influencers influencers)
+        : name{name}, influencers{influencers},
+          // TODO
+          models{} {}
+
+  public: // members
+    std::string name;
+    std::vector<std::function<std::unique_ptr<Devs::_impl::IOModel<Time>>>> models;
+    Influencers influencers;
+};
+
 //----------------------------------------------------------------------------------------------------------------------
 namespace _impl {
-
-template <typename T> class Box;
 
 class IBox {
 
@@ -75,6 +103,7 @@ class Dynamic {
     template <typename T> Dynamic(const T value) : p_box_{Devs::_impl::Box<T>::create(value)} {}
 
   public: // methods
+    template <typename T> operator T() const { return get<T>(); }
     template <typename T> T get() const { return Devs::_impl::IBox::get<T>(*p_box_); }
 
   private: // members
@@ -253,25 +282,31 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 template <typename Time> class IOModel {
 
   public: // ctors, dtor
-    explicit IOModel(const std::string name, Calendar<Time>* p_calendar)
-        : name_{name}, p_calendar_{p_calendar}, input_listeners_{}, output_listeners_{} {
-        if (name.empty()) {
-            throw std::runtime_error("Model name should not be empty");
-        }
-    }
+    explicit IOModel(Calendar<Time>* p_calendar)
+        : p_calendar_{p_calendar}, input_transformer_{IOModel::indentity_transformer}, input_listeners_{},
+          output_listeners_{} {}
+
+    virtual ~IOModel() = default;
+
+  public: // static members
+    static Dynamic identity_transformer(const Dynamic& input) { return input; }
 
   public: // methods
-    const std::string& name() const { return name_; }
+    virtual const std::string& name() const = 0;
 
     void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
         output_listeners_.push_back(listener);
     }
 
-    void input(const Time& time, const Dynamic& value) const {
+    void set_input_transformer(const std::function<Dynamic(const Dynamic&)> transformer) {
+        input_transformer_ = transformer;
+    }
+
+    void input(const std::string& from, const Time& time, const Dynamic& value) const {
         schedule_event(Event<Time>{time,
-                                   [this, value]() {
-                                       invoke_listeners<const std::string&, const Time&, const Dynamic>(
-                                           input_listeners_, name(), calendar_time(), value);
+                                   [this, from, value]() {
+                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
+                                                                                            input_transformer_(value));
                                    },
                                    "input"});
     }
@@ -281,7 +316,7 @@ template <typename Time> class IOModel {
   protected: // methods
     const Time& calendar_time() const { return p_calendar_->time(); }
 
-    void add_input_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
+    void add_input_listener(const Listener<const std::string&, const Dynamic&> listener) {
         input_listeners_.push_back(listener);
     }
 
@@ -291,20 +326,20 @@ template <typename Time> class IOModel {
     }
 
   private: // members
-    std::string name_;
     Calendar<Time>* p_calendar_;
-    Listeners<const std::string&, const Time&, const Dynamic&> input_listeners_;
+    std::function<Dynamic(const Dynamic&)> input_transformer_;
+    Listeners<const std::string&, const Dynamic&> input_listeners_;
     Listeners<const std::string&, const Time&, const Dynamic&> output_listeners_;
 };
 
 template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<Time> {
 
   public: // ctors, dtor
-    AtomicImpl(const std::string name, Calendar<Time>* p_calendar, const Devs::Atomic<X, Y, S, Time> model)
-        : IOModel<Time>{name, p_calendar}, model_{model}, last_transition_time_{}, state_transition_listeners_{},
+    explicit AtomicImpl(Calendar<Time>* p_calendar, const Devs::Atomic<X, Y, S, Time> model)
+        : IOModel<Time>{p_calendar}, model_{model}, last_transition_time_{}, state_transition_listeners_{},
           cancel_internal_transition_{} {
         this->add_input_listener(
-            [this](const std::string&, const Time&, const Dynamic& input) { dynamic_input_listener(input); });
+            [this](const std::string& from, const Dynamic& input) { dynamic_input_listener(from, input); });
         schedule_internal_transition();
     }
 
@@ -314,6 +349,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
   private: // methods
+    const std::string& name() override { return model_->name; }
+
     const S& state() const { return model_.s; }
 
     void transition_state(const S state) {
@@ -356,11 +393,13 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         this->schedule_event(event);
     }
 
-    void dynamic_input_listener(const Dynamic& input) {
+    void dynamic_input_listener(const std::string& from, const Dynamic& input) {
         try {
-            input_listener(input.get<X>());
+            input_listener(input);
         } catch (std::bad_cast&) {
-            // TODO error handling
+            // TODO error message
+            std::stringstream s;
+            throw std::runtime_error(s.str());
         }
     }
 
@@ -383,14 +422,18 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
 
-using Influencers = std::unordered_map<std::string, std::vector<std::string>>;
-
 // TODO
-// class Compound : IOModel {
+template <typename Time = double> class CompoundImpl : IOModel<Time> {
 
-//   private: // member
-//     std::unordered_map<std::string, > models_;
-// };
+  public: // ctors, dtor
+    CompoundImpl() : models_{} {}
+
+  public: // methods
+    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& models() { return models_; }
+
+  private: // member
+    std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> models_;
+};
 
 } // namespace _impl
 //----------------------------------------------------------------------------------------------------------------------
@@ -473,9 +516,9 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
 };
 } // namespace Printer
 //----------------------------------------------------------------------------------------------------------------------
-template <typename X, typename Y, typename S, typename Time = double> class Simulator {
+template <typename X, typename Y, typename Time = double> class Simulator {
   public: // ctors, dtor
-    explicit Simulator(const Devs::Atomic<X, Y, S, Time> model, const Time start_time, const Time end_time,
+    explicit Simulator(const Devs::_impl::model, const Time start_time, const Time end_time,
                        std::unique_ptr<Printer::Base<S, Time>> printer = Printer::Verbose<S, Time>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
           model_{Devs::_impl::AtomicImpl<X, Y, S, Time>{"test", p_calendar_.get(), model}}, // TODO remove test
@@ -490,6 +533,12 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
     }
 
   public: // methods
+    void schedule_model_input(const Time& time, const Dynamic& value) { model_.input("", time, value); }
+
+    void add_model_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
+        model_.add_output_listener(listener);
+    }
+
     void run() {
         p_printer_->on_sim_start(p_calendar_->time());
         while (p_calendar_->execute_next())
@@ -499,8 +548,8 @@ template <typename X, typename Y, typename S, typename Time = double> class Simu
 
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
-    Devs::_impl::AtomicImpl<X, Y, S, Time> model_;
-    std::unique_ptr<Devs::Printer::Base<S, Time>> p_printer_;
+    Devs::_impl::CompoundImpl<Time> model_;
+    std::unique_ptr<Devs::Printer::Base<Time>> p_printer_;
 };
 //----------------------------------------------------------------------------------------------------------------------
 } // namespace Devs
