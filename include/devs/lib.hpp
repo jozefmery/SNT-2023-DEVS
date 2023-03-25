@@ -5,6 +5,7 @@
  */
 #pragma once
 //----------------------------------------------------------------------------------------------------------------------
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iomanip>
@@ -96,7 +97,7 @@ using Influencers = std::unordered_map<std::string, Transformer>;
 
 template <typename Time> struct Compound {
   public: // members
-    std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>> models;
+    std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>> components;
     std::unordered_map<std::string, Influencers> influencers;
     std::function<std::string(const std::vector<std::string>)> select;
 };
@@ -313,7 +314,24 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
             execute_event_action(events[0]);
             return;
         }
-        // TODO
+        std::vector<std::string> names;
+        for (const auto event : events) {
+            names.push_back(event.name());
+        }
+
+        while (events.size() > 1) {
+            const name = select(names);
+            const auto name_it = std::find(names.begin(), names.end(), name);
+            if (name_it == names.end()) {
+                throw std::runtime_error(std::string("Invalid model name returned by select: ") + name);
+            }
+            const auto idx = std::distance(names.begin(), name_it);
+            execute_event_action(events[idx]);
+            events.erase(events.begin() + idx);
+            names.erase(name_it);
+        }
+
+        execute_event_action(events[0]);
     }
 
     void execute_event_action(const Event<Time>& event) {
@@ -390,7 +408,13 @@ template <typename Time> class IOModel {
             return value;
         }
         const auto transformer = it->second;
-        return transformer(value);
+        try {
+            return transformer(value);
+        } catch (const std::bad_cast&) {
+            std::stringstream s{};
+            s << "Invalid dynamic cast in transformer function for influencer " << influencer << " in model " << name();
+            throw std::runtime_error(s.str());
+        }
     }
 
   private: // members
@@ -420,13 +444,12 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
   private: // methods
-    const std::string& name() override { return model_->name; }
-
     const S& state() const { return model_.s; }
 
     void transition_state(const S state) {
         state_transitioned(state_to_str(model_.s), state_to_str(state));
         model_.s = state;
+        update_last_transition_time();
     }
 
     Time time_advance() const { return model_.ta(state()); }
@@ -444,7 +467,7 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         transition_state(new_state);
     }
 
-    void update_time(const Time& transition_time) { last_transition_time_ = transition_time; }
+    void update_last_transition_time() { last_transition_time_ = this->calendar_time(); }
 
     std::function<void()> get_internal_transition_action() {
         return [this]() {
@@ -452,13 +475,12 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
             this->output(out);
 
             schedule_internal_transition();
-            update_time(this->calendar_time());
         };
     }
 
     void schedule_internal_transition() {
         const auto event =
-            Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), "internal transition"};
+            Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), name(), "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         this->schedule_event(event);
     }
@@ -466,9 +488,9 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     void dynamic_input_listener(const std::string& from, const Dynamic& input) {
         try {
             input_listener(input);
-        } catch (std::bad_cast&) {
-            // TODO error message
+        } catch (const std::bad_cast&) {
             std::stringstream s;
+            s << "The output type of model " << from << " is not compatible with the input type of model " << name();
             throw std::runtime_error(s.str());
         }
     }
@@ -480,7 +502,6 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
 
         external_transition(elapsed_since_last_transition(), input);
         schedule_internal_transition();
-        update_time(this->calendar_time());
     }
 
     Time elapsed_since_last_transition() { return this->calendar_time() - last_transition_time_; }
@@ -507,6 +528,7 @@ template <typename Time = double> class CompoundImpl : IOModel<Time> {
   public: // methods
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& models() { return models_; }
 
+  private: // methods
   private: // member
     Devs::Model::Compound<Time> model_;
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components_;
