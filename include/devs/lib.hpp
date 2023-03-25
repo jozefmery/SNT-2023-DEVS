@@ -299,8 +299,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
             return {};
         }
         std::vector<Event<Time>> concurrent_events{event};
-        std::optional<Event<Time>> concurrent_event{};
-        while (concurrent_event = next_pending_concurrent_event(event.time(), epsilon)) {
+        while (const auto concurrent_event = next_pending_concurrent_event(event.time(), epsilon)) {
             concurrent_events.push_back(concurrent_event);
         }
 
@@ -479,8 +478,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
     void schedule_internal_transition() {
-        const auto event =
-            Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), name(), "internal transition"};
+        const auto event = Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), this->name(),
+                                                    "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         this->schedule_event(event);
     }
@@ -517,18 +516,33 @@ template <typename Time = double> class CompoundImpl : IOModel<Time> {
 
   public: // ctors, dtor
     explicit CompoundImpl(const std::string name, const Devs::Model::Compound<Time> model, Calendar<Time>* p_calendar)
-        : IOModel<Time>{name, p_calendar}, model_{model}, components_{} {}
+        : IOModel<Time>{name, p_calendar}, model_{model}, components_{factories_to_components(p_calendar)} {}
 
     template <typename X, typename Y, typename S>
     explicit CompoundImpl(const std::string name, const Devs::Model::Atomic<X, Y, S, Time> model,
                           Calendar<Time>* p_calendar)
-        : IOModel<Time>{name, p_calendar}, model_{model}, // TODO
-          components_{} {}
+        : CompoundImpl{name,
+                       {
+                           // TODO
+                       },
+                       p_calendar} {}
 
   public: // methods
-    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& models() { return models_; }
+    const std::function<std::string(const std::vector<std::string>&)> select() const { return model_.select; }
+
+    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
+    std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>
+    factories_to_components(Calendar<Time>* p_calendar) {
+        for (const auto& [name, factory] = model_.components) {
+            if (name == this->name()) {
+                throw std::runtime_error("Component has same name as compound model " + name);
+            }
+            components_[name] = factory(name, p_calendar);
+        }
+    };
+
   private: // member
     Devs::Model::Compound<Time> model_;
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components_;
