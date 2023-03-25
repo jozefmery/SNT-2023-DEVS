@@ -363,7 +363,18 @@ template <typename Time> class IOModel {
 
     void set_influencers(const Devs::Model::Influencers influencers) { influencers_ = influencers; }
 
+    void connect_influencer_listeners(IOModel<Time>& influencer) const {
+        if (from == name()) {
+            throw std::runtime_error("Model " + from + " contains a forbidden self-influence loop");
+        }
+        influencer.add_output_listener(
+            [this](const std::string& from, const Time& time, const Dynamic& value) { input(from, time, value); })
+    }
+
     void input(const std::string& from, const Time& time, const Dynamic& value) const {
+        if (from == name()) {
+            throw std::runtime_error("Model " + from + " contains a forbidden self-influence loop");
+        }
         schedule_event(Event<Time>{time,
                                    [this, from, &value]() {
                                        invoke_listeners<const std::string&, const Dynamic&>(
@@ -431,6 +442,10 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     explicit AtomicImpl(const std::string name, const Devs::Model::Atomic<X, Y, S, Time> model,
                         Calendar<Time>* p_calendar)
         : IOModel<Time>{name, p_calendar}, model_{model}, last_transition_time_{}, cancel_internal_transition_{} {
+        if (name.empty()) {
+            throw std::runtime_error("Component name should not be empty");
+        }
+
         this->add_input_listener(
             [this](const std::string& from, const Dynamic& input) { dynamic_input_listener(from, input); });
         schedule_internal_transition();
@@ -516,35 +531,45 @@ template <typename Time = double> class CompoundImpl : IOModel<Time> {
 
   public: // ctors, dtor
     explicit CompoundImpl(const std::string name, const Devs::Model::Compound<Time> model, Calendar<Time>* p_calendar)
-        : IOModel<Time>{name, p_calendar}, model_{model}, components_{factories_to_components(p_calendar)} {}
+        : IOModel<Time>{name, p_calendar}, select_{model.select},
+          components_{factories_to_components(model.components, p_calendar)} {
+        // TODO connect components
+    }
 
-    template <typename X, typename Y, typename S>
-    explicit CompoundImpl(const std::string name, const Devs::Model::Atomic<X, Y, S, Time> model,
-                          Calendar<Time>* p_calendar)
-        : CompoundImpl{name,
-                       {
-                           // TODO
-                       },
-                       p_calendar} {}
+    // TODO
+    // template <typename X, typename Y, typename S>
+    // explicit CompoundImpl(const std::string name, const Devs::Model::Atomic<X, Y, S, Time> model,
+    //                       Calendar<Time>* p_calendar)
+    //     : IOModel<Time>{name, p_calendar}, model_{model}, components_{factories_to_components(p_calendar)} {}
 
   public: // methods
-    const std::function<std::string(const std::vector<std::string>&)> select() const { return model_.select; }
+    const std::function<std::string(const std::vector<std::string>&)> select() const { return select_; }
 
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>
-    factories_to_components(Calendar<Time>* p_calendar) {
-        for (const auto& [name, factory] = model_.components) {
+    factories_to_components(const std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>>& factories,
+                            Calendar<Time>* p_calendar) {
+
+        if (factories.empty()) {
+            throw std::runtime_error("Compound model " + this->name() + " has no components");
+        }
+
+        std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components{};
+
+        for (const auto& [name, factory] = factories) {
             if (name == this->name()) {
                 throw std::runtime_error("Component has same name as compound model " + name);
             }
-            components_[name] = factory(name, p_calendar);
+            components[name] = factory(name, p_calendar);
         }
-    };
+
+        return components;
+    }
 
   private: // member
-    Devs::Model::Compound<Time> model_;
+    std::function<std::string(const std::vector<std::string>&)> select_;
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components_;
 };
 
@@ -562,7 +587,7 @@ constexpr double INF = std::numeric_limits<double>::infinity();
 } // namespace Const
 //----------------------------------------------------------------------------------------------------------------------
 namespace Printer {
-template <typename S, typename Time = double> class Base {
+template <typename Time = double> class Base {
 
   public: // ctors, dtor
     explicit Base(std::ostream& stream = std::cout) : s_{stream} {}
@@ -584,13 +609,13 @@ template <typename S, typename Time = double> class Base {
     virtual void on_event_scheduled(const Time&, const Devs::_impl::Event<Time>&) {}
     virtual void on_event_action_executed(const Time&, const Devs::_impl::Event<Time>&) {}
     // model
-    virtual void on_model_state_transition(const std::string&, const Time&, const S&, const S&) {}
+    virtual void on_model_state_transition(const std::string&, const Time&, const std::string&, const std::string&) {}
 
   protected: // members
     std::ostream& s_;
 };
 
-template <typename S, typename Time = double> class Verbose : public Base<S, Time> {
+template <typename Time = double> class Verbose : public Base<Time> {
 
   public: // ctors, dtor
     explicit Verbose(std::ostream& stream = std::cout) : Base<S, Time>{stream} {}
@@ -609,7 +634,8 @@ template <typename S, typename Time = double> class Verbose : public Base<S, Tim
         this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
     }
     // model
-    void on_model_state_transition(const std::string& name, const Time& time, const S& prev, const S& next) override {
+    void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
+                                   const std::string& next) override {
         this->s_ << prefix(time) << "Model " << name << " state: " << prev << " -> " << next << "\n";
     }
 
