@@ -21,10 +21,6 @@
 //----------------------------------------------------------------------------------------------------------------------
 namespace Devs {
 
-namespace Model {
-template <typename X, typename Y, typename S, typename Time> struct Atomic;
-} // namespace Model
-
 namespace _impl {
 // declarations
 template <typename T> class Box;
@@ -79,8 +75,9 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
 
   public: // methods
     operator Devs::_impl::AbstractAtomicFactory<Time>() {
-        return [this](const std::string name, Devs::_impl::Calendar<Time>* p_calendar) {
-            return std::make_unique<Devs::_impl::AtomicImpl<X, Y, S, Time>>(name, *this, p_calendar);
+        const auto copy = *this;
+        return [copy](const std::string name, Devs::_impl::Calendar<Time>* p_calendar) {
+            return std::make_unique<Devs::_impl::AtomicImpl<X, Y, S, Time>>(name, copy, p_calendar);
         };
     }
 
@@ -92,14 +89,17 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
     std::function<Time(const S&)> ta;
 };
 
-using Transformer = std::function<Dynamic(const Dynamic&)>;
+using Transformer = std::optional<std::function<Dynamic(const Dynamic&)>>;
 using Influencers = std::unordered_map<std::string, Transformer>;
 
 template <typename Time> struct Compound {
+  public: // static functions
+    static std::string fifo_selector(const std::vector<std::string>& names) { return names[0]; }
+
   public: // members
     std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>> components;
     std::unordered_map<std::string, Influencers> influencers;
-    std::function<std::string(const std::vector<std::string>)> select;
+    std::function<std::string(const std::vector<std::string>&)> select = fifo_selector;
 };
 } // namespace Model
 //----------------------------------------------------------------------------------------------------------------------
@@ -182,9 +182,6 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         : CalendarBase<Time>{EventSorter<Time>{}}, time_{start_time}, end_time_{end_time}, time_advanced_listeners_{},
           event_scheduled_listeners_{}, event_action_executed_listeners_{} {}
 
-  public: // static functions
-    std::string fifo_selector(const std::vector<std::string>& names) { return names[0]; }
-
   public: // methods
     const Time& time() const { return time_; }
 
@@ -220,8 +217,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
     // returns whether an event has actually been executed
-    bool execute_next(const std::function<std::string(const std::vector<std::string>&)> select = fifo_selector,
-                      const Time& epsilon = 0.001) {
+    bool execute_next(const std::function<std::string(const std::vector<std::string>&)> select, const Time& epsilon) {
 
         const auto events = next(epsilon);
 
@@ -250,7 +246,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         event_scheduled_listeners_.push_back(listener);
     }
 
-    void add_event_action_executed_listeners_(const Listener<const Time&, const Event<Time>&> listener) {
+    void add_event_action_executed_listener(const Listener<const Time&, const Event<Time>&> listener) {
         event_action_executed_listeners_.push_back(listener);
     }
 
@@ -319,7 +315,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
 
         while (events.size() > 1) {
-            const name = select(names);
+            const auto name = select(names);
             const auto name_it = std::find(names.begin(), names.end(), name);
             if (name_it == names.end()) {
                 throw std::runtime_error(std::string("Invalid model name returned by select: ") + name);
@@ -355,30 +351,34 @@ template <typename Time> class IOModel {
 
   public: // ctors, dtor
     explicit IOModel(const std::string name, Calendar<Time>* p_calendar)
-        : name_{name}, p_calendar_{p_calendar}, influencers_{}, input_listeners_{}, output_listeners_{},
-          state_transition_listeners_{} {}
+        : name_{name}, p_calendar_{p_calendar}, input_listeners_{}, output_listeners_{}, state_transition_listeners_{} {
+    }
 
   public: // methods
     const std::string& name() const { return name_; }
 
-    void set_influencers(const Devs::Model::Influencers influencers) { influencers_ = influencers; }
-
-    void connect_influencer_listeners(IOModel<Time>& influencer) const {
-        if (from == name()) {
-            throw std::runtime_error("Model " + from + " contains a forbidden self-influence loop");
+    void
+    connect_influencer_listeners(IOModel<Time>& influencer,
+                                 const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) const {
+        if (influencer.name() == name()) {
+            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
         }
+        const auto transformer = maybe_transformer.value_or([](const Dynamic& value) { return value; });
+        const auto influencer_name = influencer.name();
         influencer.add_output_listener(
-            [this](const std::string& from, const Time& time, const Dynamic& value) { input(from, time, value); })
+            [this, influencer_name, transformer](const std::string& from, const Time& time, const Dynamic& value) {
+                input(from, time, influencer_transform(value, influencer_name, transformer));
+            });
     }
 
     void input(const std::string& from, const Time& time, const Dynamic& value) const {
         if (from == name()) {
-            throw std::runtime_error("Model " + from + " contains a forbidden self-influence loop");
+            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
         }
         schedule_event(Event<Time>{time,
                                    [this, from, &value]() {
-                                       invoke_listeners<const std::string&, const Dynamic&>(
-                                           input_listeners_, from, influencer_transform(value));
+                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
+                                                                                            value);
                                    },
                                    name(), "input"});
     }
@@ -404,7 +404,7 @@ template <typename Time> class IOModel {
 
     void state_transitioned(const std::string& prev, const std::string& next) {
         invoke_listeners<const std::string&, const Time&, const std::string&, const std::string&>(
-            state_transition_listeners_, name(), prev, next);
+            state_transition_listeners_, name(), calendar_time(), prev, next);
     }
 
     void add_input_listener(const Listener<const std::string&, const Dynamic&> listener) {
@@ -412,12 +412,8 @@ template <typename Time> class IOModel {
     }
 
   private: // methods
-    Dynamic influencer_transform(const std::string& influencer, const Dynamic& value) {
-        const auto it = influencers_.find(influencer);
-        if (it == influencers_.end()) {
-            return value;
-        }
-        const auto transformer = it->second;
+    Dynamic influencer_transform(const Dynamic& value, const std::string& influencer,
+                                 const std::function<Dynamic(const Dynamic&)> transformer) {
         try {
             return transformer(value);
         } catch (const std::bad_cast&) {
@@ -430,7 +426,6 @@ template <typename Time> class IOModel {
   private: // members
     std::string name_;
     Calendar<Time>* p_calendar_;
-    Devs::Model::Influencers influencers_;
     Listeners<const std::string&, const Dynamic&> input_listeners_;
     Listeners<const std::string&, const Time&, const Dynamic&> output_listeners_;
     Listeners<const std::string&, const Time&, const std::string&, const std::string&> state_transition_listeners_;
@@ -454,14 +449,15 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
   private: // static functions
     std::string state_to_str(const S& state) {
         std::stringstream s;
-        return (s << state).str();
+        s << state;
+        return s.str();
     }
 
   private: // methods
     const S& state() const { return model_.s; }
 
     void transition_state(const S state) {
-        state_transitioned(state_to_str(model_.s), state_to_str(state));
+        this->state_transitioned(state_to_str(model_.s), state_to_str(state));
         model_.s = state;
         update_last_transition_time();
     }
@@ -504,7 +500,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
             input_listener(input);
         } catch (const std::bad_cast&) {
             std::stringstream s;
-            s << "The output type of model " << from << " is not compatible with the input type of model " << name();
+            s << "The output type of model " << from << " is not compatible with the input type of model "
+              << this->name();
             throw std::runtime_error(s.str());
         }
     }
@@ -526,14 +523,13 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
 
-// TODO
-template <typename Time = double> class CompoundImpl : IOModel<Time> {
+template <typename Time = double> class CompoundImpl : public IOModel<Time> {
 
   public: // ctors, dtor
     explicit CompoundImpl(const std::string name, const Devs::Model::Compound<Time> model, Calendar<Time>* p_calendar)
         : IOModel<Time>{name, p_calendar}, select_{model.select},
           components_{factories_to_components(model.components, p_calendar)} {
-        // TODO connect components
+        connect_components(model.influencers);
     }
 
     // TODO
@@ -548,6 +544,10 @@ template <typename Time = double> class CompoundImpl : IOModel<Time> {
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
+    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& influencers) {
+        // TODO
+    }
+
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>
     factories_to_components(const std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>>& factories,
                             Calendar<Time>* p_calendar) {
@@ -558,7 +558,7 @@ template <typename Time = double> class CompoundImpl : IOModel<Time> {
 
         std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components{};
 
-        for (const auto& [name, factory] = factories) {
+        for (const auto& [name, factory] : factories) {
             if (name == this->name()) {
                 throw std::runtime_error("Component has same name as compound model " + name);
             }
@@ -596,8 +596,8 @@ template <typename Time = double> class Base {
     virtual ~Base() = default;
 
   public: // static functions
-    static std::unique_ptr<Base<S, Time>> create(std::ostream& stream = std::cout) {
-        return std::make_unique<Base<S, Time>>(stream);
+    static std::unique_ptr<Base<Time>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Base<Time>>(stream);
     }
 
   public: // methods
@@ -618,11 +618,11 @@ template <typename Time = double> class Base {
 template <typename Time = double> class Verbose : public Base<Time> {
 
   public: // ctors, dtor
-    explicit Verbose(std::ostream& stream = std::cout) : Base<S, Time>{stream} {}
+    explicit Verbose(std::ostream& stream = std::cout) : Base<Time>{stream} {}
 
   public: // static functions
-    static std::unique_ptr<Verbose<S, Time>> create(std::ostream& stream = std::cout) {
-        return std::make_unique<Verbose<S, Time>>(stream);
+    static std::unique_ptr<Verbose<Time>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Verbose<Time>>(stream);
     }
 
   public: // methods
@@ -632,6 +632,12 @@ template <typename Time = double> class Verbose : public Base<Time> {
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
         this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
+    }
+    void on_event_scheduled(const Time& time, const Devs::_impl::Event<Time>& event) override {
+        this->s_ << prefix(time) << "Event scheduled: " << event.to_string() << "\n";
+    }
+    void on_event_action_executed(const Time& time, const Devs::_impl::Event<Time>& event) override {
+        this->s_ << prefix(time) << "Event action executed: " << event.to_string() << "\n";
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
@@ -659,31 +665,47 @@ template <typename Time = double> class Simulator {
   public: // ctors, dtor
     explicit Simulator(const std::string model_name, const Devs::Model::Compound<Time> model, const Time start_time,
                        const Time end_time,
-                       std::unique_ptr<Printer::Base<S, Time>> printer = Printer::Verbose<S, Time>::create())
+                       std::unique_ptr<Printer::Base<Time>> printer = Printer::Verbose<Time>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
-          model_{Devs::_impl::CompoundImpl<Time>{}}, // TODO remove test
+          model_{Devs::_impl::CompoundImpl<Time>{model_name, model, p_calendar_.get()}},
           p_printer_{std::move(printer)} {
-        p_calendar_->add_time_advanced_listener(
-            [this](const Time& prev, const Time& next) { p_printer_->on_time_advanced(prev, next); });
-        model_.add_state_transition_listener(
-            [this](const std::string& name, const Time& time, const S& prev, const S& next) {
-                p_printer_->on_model_state_transition(name, time, prev, next);
-            });
-        // TODO add listeners
+        setup_event_listeners();
     }
 
   public: // methods
     void schedule_model_input(const Time& time, const Dynamic& value) { model_.input("", time, value); }
 
-    void add_model_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
+    void
+    add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
         model_.add_output_listener(listener);
     }
 
-    void run() {
+    void run(const Time& epsilon = 0.001) {
         p_printer_->on_sim_start(p_calendar_->time());
-        while (p_calendar_->execute_next())
+        while (p_calendar_->execute_next(model_.select(), epsilon))
             ;
         p_printer_->on_sim_end(p_calendar_->time());
+    }
+
+  private: // methods
+    void setup_event_listeners() {
+        p_calendar_->add_time_advanced_listener(
+            [this](const Time& prev, const Time& next) { p_printer_->on_time_advanced(prev, next); });
+        p_calendar_->add_event_scheduled_listener([this](const Time& time, const Devs::_impl::Event<Time>& event) {
+            p_printer_->on_event_scheduled(time, event);
+        });
+        p_calendar_->add_event_action_executed_listener(
+            [this](const Time& time, const Devs::_impl::Event<Time>& event) {
+                p_printer_->on_event_action_executed(time, event);
+            });
+        // no need attach state transition listener to compound model as it has no state transitions (or state)
+        for (auto& pair : model_.components()) {
+            auto& p_component = pair.second;
+            p_component->add_state_transition_listener(
+                [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
+                    p_printer_->on_model_state_transition(name, time, prev, next);
+                });
+        }
     }
 
   private: // members
