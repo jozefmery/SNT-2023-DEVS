@@ -383,26 +383,8 @@ template <typename Time> class IOModel {
         state_transition_listeners_.push_back(listener);
     }
 
-  protected: // static functions
-    std::function<Dynamic(const Dynamic&)>
-    get_transformer(const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) {
-        return maybe_transformer.value_or([](const Dynamic& value) { return value; });
-    }
-
   protected: // methods
     void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
-
-    void connect_influencer(IOModel<Time>& influencer,
-                            const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) const {
-        if (influencer.name() == name()) {
-            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
-        }
-        const auto transformer = get_transformer(maybe_transformer);
-        influencer.add_output_listener(
-            [this, transformer](const std::string& from, const Time& time, const Dynamic& value) {
-                input_from_model(from, time, influencer_transform(from, value, transformer));
-            });
-    }
 
     void input_from_model(const std::string& from, const Time& time, const Dynamic& value) const {
         if (from == name()) {
@@ -434,9 +416,12 @@ template <typename Time> class IOModel {
     }
 
     Dynamic influencer_transform(const std::string& influencer, const Dynamic& value,
-                                 const std::function<Dynamic(const Dynamic&)> transformer) {
+                                 const std::optional<std::function<Dynamic(const Dynamic&)>> transformer) {
         try {
-            return transformer(value);
+            if (transformer) {
+                return (*transformer)(value);
+            }
+            return value;
         } catch (const std::bad_cast&) {
             std::stringstream s{};
             s << "Invalid dynamic cast in transformer function for influencer " << influencer << " in model " << name();
@@ -565,35 +550,75 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
-    IOModel<Time>& model_ref(const std::string& name) {
+    IOModel<Time>* model_ref(const std::string& name) {
         auto it = components_.find(name);
         if (it == components_.end()) {
-            std::stringstream s;
-            s << "Model " << this->name() << " influenced by non-existing model: " << name;
-            throw std::runtime_error(s.str());
+            return nullptr;
         }
 
-        return *it->second;
+        return it->second.get();
+    }
+    void connect_component_output_listener(const std::string& name,
+                                           const Listener<const std::string&, const Time&, const Dynamic&> listener) {
+        const auto p_model = model_ref(name);
+        if (p_model == nullptr) {
+            std::stringstream s;
+            s << "Connecting to non-existing component: " << name;
+            throw std::runtime_error(s.str());
+        }
+        p_model->add_output_listener([listener](const std::string& from, const Time& time, const Dynamic& value) {
+            listener(from, time, value);
+        });
     }
 
-    void connect_output_influencers(const Devs::Model::Influencers& influencer) {
-        // TODO
-        for (const auto& [name, maybe_transformer] : influencer) {
-            const auto transformer = IOModel<Time>::get_transformer(maybe_transformer);
-            model_ref(name).add_output_listener(
-                [this, transformer](const std::string& from, const Time&, const Dynamic& value) {
+    void connect_compound_output_influencers(const Devs::Model::Influencers& influencers) {
+        for (const auto& [name, transformer] : influencers) {
+
+            connect_component_output_listener(
+                name, [this, transformer](const std::string& from, const Time&, const Dynamic& value) {
                     this->output(this->influencer_transform(from, value, transformer));
                 });
         }
     }
 
-    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& model_influencers) {
+    void connect_component_to_compound_input(const std::string& component_name,
+                                             const Devs::Model::Transformer& transformer) {
         // TODO
-        for (const auto& [name, influencers] : model_influencers) {
-            if (name == this->name()) {
-                connect_output_influencers(influencers);
+    }
+
+    void connect_component_influencers(const std::string& component_name, const Devs::Model::Influencers& influencers) {
+        const auto p_component = model_ref(component_name);
+        if (p_component == nullptr) {
+            std::stringstream s;
+            s << "Defining influencers for non-existing component: " << component_name;
+            throw std::runtime_error(s.str());
+        }
+
+        for (const auto& [influencer, transformer] : influencers) {
+            if (component_name == influencer) {
+                throw std::runtime_error("Component " + component_name + " contains a forbidden self-influence loop");
+            }
+
+            if (influencer == this->name()) {
+                connect_component_to_compound_input(component_name, transformer);
                 continue;
             }
+
+            connect_component_output_listener(influencer, [p_component, transformer](const std::string& from,
+                                                                                     const Time& time,
+                                                                                     const Dynamic& value) {
+                p_component->input_from_model(from, time, p_component->influencer_transform(from, value, transformer))
+            });
+        }
+    }
+
+    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& model_influencers) {
+        for (const auto& [component, influencers] : model_influencers) {
+            if (component == this->name()) {
+                connect_compound_output_influencers(influencers);
+                continue;
+            }
+            connect_component_influencers(component, influencers);
         }
     }
 
@@ -675,7 +700,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Verbose :
     // sim
     void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
     void on_sim_step(const Time& time, const Step& step) override {
-        this->s_ << prefix(time) << "Step " << step << "---------------------"
+        this->s_ << prefix(time) << "Step " << step << " ---------------------"
                  << "\n";
     }
     void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
@@ -721,6 +746,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
           p_printer_{std::move(printer)} {
         setup_event_listeners();
     }
+    // TODO
 
   public: // methods
     void schedule_model_input(const Time& time, const Dynamic& value) { model_.external_input(time, value); }
