@@ -364,8 +364,12 @@ template <typename Time> class IOModel {
         : name_{name}, p_calendar_{p_calendar}, input_listeners_{}, output_listeners_{}, state_transition_listeners_{} {
     }
 
+    virtual ~IOModel() = default;
+
   public: // methods
     const std::string& name() const { return name_; }
+
+    virtual const std::function<std::string(const std::vector<std::string>&)> select() const = 0;
 
     void input_from_influencer(const std::string& from, const Time& time, const Dynamic& value,
                                const Devs::Model::Transformer& transformer) const {
@@ -461,6 +465,10 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
   private: // methods
+    const std::function<std::string(const std::vector<std::string>&)> select() const override {
+        return Devs::Model::Compound<Time>::fifo_selector;
+    }
+
     const S& state() const { return model_.s; }
 
     void transition_state(const S state) {
@@ -539,14 +547,8 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         connect_components(model.influencers);
     }
 
-    // TODO
-    // template <typename X, typename Y, typename S>
-    // explicit CompoundImpl(const std::string name, const Devs::Model::Atomic<X, Y, S, Time> model,
-    //                       Calendar<Time>* p_calendar)
-    //     : IOModel<Time>{name, p_calendar}, model_{model}, components_{factories_to_components(p_calendar)} {}
-
   public: // methods
-    const std::function<std::string(const std::vector<std::string>&)> select() const { return select_; }
+    const std::function<std::string(const std::vector<std::string>&)> select() const override { return select_; }
 
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
@@ -741,28 +743,26 @@ template <typename Time = double, typename Step = std::uint64_t> class Verbose :
 //----------------------------------------------------------------------------------------------------------------------
 template <typename Time = double, typename Step = std::uint64_t> class Simulator {
   public: // ctors, dtor
-    explicit Simulator(const std::string model_name, const Devs::Model::Compound<Time> model, const Time start_time,
-                       const Time end_time,
+    explicit Simulator(const std::string model_name, const Devs::_impl::AbstractModelFactory<Time> model,
+                       const Time start_time, const Time end_time,
                        std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::Verbose<Time, Step>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
-          model_{Devs::_impl::CompoundImpl<Time>{model_name, model, p_calendar_.get()}},
-          p_printer_{std::move(printer)} {
+          model_{model(model_name, p_calendar_.get())}, p_printer_{std::move(printer)} {
         setup_event_listeners();
     }
-    // TODO
 
   public: // methods
-    void schedule_model_input(const Time& time, const Dynamic& value) { model_.external_input(time, value); }
+    void schedule_model_input(const Time& time, const Dynamic& value) { model_->external_input(time, value); }
 
     void
     add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
-        model_.add_output_listener(listener);
+        model_->add_output_listener(listener);
     }
 
     void run(const Time& time_epsilon = 0.001) {
         std::uint64_t step{};
         p_printer_->on_sim_start(p_calendar_->time());
-        while (p_calendar_->execute_next(model_.select(), time_epsilon)) {
+        while (p_calendar_->execute_next(model_->select(), time_epsilon)) {
             p_printer_->on_sim_step(p_calendar_->time(), step);
             ++step;
         }
@@ -781,18 +781,19 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
                 p_printer_->on_event_action_executed(time, event);
             });
         // no need attach state transition listener to compound model as it has no state transitions (or state)
-        for (auto& pair : model_.components()) {
-            auto& p_component = pair.second;
-            p_component->add_state_transition_listener(
-                [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
-                    p_printer_->on_model_state_transition(name, time, prev, next);
-                });
-        }
+        // TODO
+        // for (auto& pair : model_.components()) {
+        //     auto& p_component = pair.second;
+        //     p_component->add_state_transition_listener(
+        //         [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
+        //             p_printer_->on_model_state_transition(name, time, prev, next);
+        //         });
+        // }
     }
 
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
-    Devs::_impl::CompoundImpl<Time> model_;
+    std::unique_ptr<Devs::_impl::IOModel<Time>> model_;
     std::unique_ptr<Devs::Printer::Base<Time, Step>> p_printer_;
 };
 //----------------------------------------------------------------------------------------------------------------------
