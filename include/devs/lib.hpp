@@ -217,9 +217,10 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
     // returns whether an event has actually been executed
-    bool execute_next(const std::function<std::string(const std::vector<std::string>&)> select, const Time& epsilon) {
+    bool execute_next(const std::function<std::string(const std::vector<std::string>&)> select,
+                      const Time& time_epsilon) {
 
-        const auto events = next(epsilon);
+        const auto events = next(time_epsilon);
 
         if (events.empty()) {
             return false;
@@ -257,7 +258,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
     }
 
-    std::optional<const Event<Time>&> next_pending_event_ref() const {
+    std::optional<const Event<Time>&> next_pending_event_ref() {
         pop_cancelled_events();
         if (this->empty()) {
             return {};
@@ -278,24 +279,24 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 
     bool has_next_pending_event() const { return next_pending_event_ref(); }
 
-    bool is_next_pending_event_concurrent(const Time& time, const Time& epsilon) const {
-        return has_next_pending_event() && std::abs(next_pending_event_ref()->time() - time) < epsilon;
+    bool is_next_pending_event_concurrent(const Time& time, const Time& time_epsilon) const {
+        return has_next_pending_event() && std::abs(next_pending_event_ref()->time() - time) <= time_epsilon;
     }
 
-    std::optional<Event<Time>> next_pending_concurrent_event(const Time& time, const Time& epsilon) {
-        if (!is_next_pending_event_concurrent(time, epsilon)) {
+    std::optional<Event<Time>> next_pending_concurrent_event(const Time& time, const Time& time_epsilon) {
+        if (!is_next_pending_event_concurrent(time, time_epsilon)) {
             return {};
         }
         return next_pending_event();
     }
 
-    std::vector<Event<Time>> next(const Time& epsilon) {
+    std::vector<Event<Time>> next(const Time& time_epsilon) {
         const auto event = next_pending_event();
         if (!event) {
             return {};
         }
         std::vector<Event<Time>> concurrent_events{event};
-        while (const auto concurrent_event = next_pending_concurrent_event(event.time(), epsilon)) {
+        while (const auto concurrent_event = next_pending_concurrent_event(event.time(), time_epsilon)) {
             concurrent_events.push_back(concurrent_event);
         }
 
@@ -357,33 +358,15 @@ template <typename Time> class IOModel {
   public: // methods
     const std::string& name() const { return name_; }
 
-    void
-    connect_influencer_listeners(IOModel<Time>& influencer,
-                                 const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) const {
-        if (influencer.name() == name()) {
-            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
-        }
-        const auto transformer = maybe_transformer.value_or([](const Dynamic& value) { return value; });
-        const auto influencer_name = influencer.name();
-        influencer.add_output_listener(
-            [this, influencer_name, transformer](const std::string& from, const Time& time, const Dynamic& value) {
-                input(from, time, influencer_transform(value, influencer_name, transformer));
-            });
-    }
-
-    void input(const std::string& from, const Time& time, const Dynamic& value) const {
-        if (from == name()) {
-            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
-        }
+    void external_input(const Time& time, const Dynamic& value) const {
+        // TODO
         schedule_event(Event<Time>{time,
                                    [this, from, &value]() {
-                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
+                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, "",
                                                                                             value);
                                    },
-                                   name(), "input"});
+                                   name(), "external input"});
     }
-
-    void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
 
     void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
         output_listeners_.push_back(listener);
@@ -395,9 +378,36 @@ template <typename Time> class IOModel {
     }
 
   protected: // methods
+    void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
+
+    void connect_influencer(IOModel<Time>& influencer,
+                            const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) const {
+        if (influencer.name() == name()) {
+            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
+        }
+        const auto transformer = maybe_transformer.value_or([](const Dynamic& value) { return value; });
+        influencer.add_output_listener(
+            [this, transformer](const std::string& from, const Time& time, const Dynamic& value) {
+                input_from_model(from, time, influencer_transform(value, from, transformer));
+            });
+    }
+
+    void input_from_model(const std::string& from, const Time& time, const Dynamic& value) const {
+        if (from == name()) {
+            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
+        }
+        schedule_event(Event<Time>{time,
+                                   [this, from, &value]() {
+                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
+                                                                                            value);
+                                   },
+                                   name(), "input"});
+    }
+
     const Time& calendar_time() const { return p_calendar_->time(); }
 
     void output(const Dynamic& value) const {
+        // using output events is redundant, invoke directly
         invoke_listeners<const std::string&, const Time&, const Dynamic&>(output_listeners_, name(), calendar_time(),
                                                                           value);
     }
@@ -530,6 +540,7 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         : IOModel<Time>{name, p_calendar}, select_{model.select},
           components_{factories_to_components(model.components, p_calendar)} {
         connect_components(model.influencers);
+        // TODO add input event listener
     }
 
     // TODO
@@ -544,6 +555,21 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
+    IOModel<Time>& model_ref(const std::string& name) {
+        // TODO
+        // if (this->name() == name) {
+        //     return *this;
+        // }
+        // auto it = components_.find(name);
+        // if (it == components_.end()) {
+        //     std::stringstream s;
+        //     s << "Model " << this->name() << " influenced by non-existing model: " << name;
+        //     throw std::runtime_error(s.str());
+        // }
+
+        // return it->second;
+    }
+
     void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& influencers) {
         // TODO
     }
@@ -557,7 +583,6 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         }
 
         std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components{};
-
         for (const auto& [name, factory] : factories) {
             if (name == this->name()) {
                 throw std::runtime_error("Component has same name as compound model " + name);
@@ -603,6 +628,7 @@ template <typename Time = double> class Base {
   public: // methods
     // sim
     virtual void on_sim_start(const Time&) {}
+    virtual void on_sim_step(const Time&) {}
     virtual void on_sim_end(const Time&) {}
     // calendar/events
     virtual void on_time_advanced(const Time&, const Time&) {}
@@ -628,6 +654,8 @@ template <typename Time = double> class Verbose : public Base<Time> {
   public: // methods
     // sim
     void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
+    // TODO
+    // void on_sim_step(const Time& time) override { this->s_ << prefix(time) << "\n"; }
     void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
@@ -673,16 +701,18 @@ template <typename Time = double> class Simulator {
     }
 
   public: // methods
-    void schedule_model_input(const Time& time, const Dynamic& value) { model_.input("", time, value); }
+    // TODO
+    void schedule_model_input(const Time& time, const Dynamic& value) { model_.external_input(time, value); }
 
-    void
-    add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
-        model_.add_output_listener(listener);
-    }
+    // void
+    // add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener)
+    // {
+    //     model_.add_output_listener(listener);
+    // }
 
-    void run(const Time& epsilon = 0.001) {
+    void run(const Time& time_epsilon = 0.001) {
         p_printer_->on_sim_start(p_calendar_->time());
-        while (p_calendar_->execute_next(model_.select(), epsilon))
+        while (p_calendar_->execute_next(model_.select(), time_epsilon))
             ;
         p_printer_->on_sim_end(p_calendar_->time());
     }
