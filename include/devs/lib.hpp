@@ -383,6 +383,12 @@ template <typename Time> class IOModel {
         state_transition_listeners_.push_back(listener);
     }
 
+  protected: // static functions
+    std::function<Dynamic(const Dynamic&)>
+    get_transformer(const std::optional<std::function<Dynamic(const Dynamic&)>> maybe_transformer) {
+        return maybe_transformer.value_or([](const Dynamic& value) { return value; });
+    }
+
   protected: // methods
     void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
 
@@ -391,10 +397,10 @@ template <typename Time> class IOModel {
         if (influencer.name() == name()) {
             throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
         }
-        const auto transformer = maybe_transformer.value_or([](const Dynamic& value) { return value; });
+        const auto transformer = get_transformer(maybe_transformer);
         influencer.add_output_listener(
             [this, transformer](const std::string& from, const Time& time, const Dynamic& value) {
-                input_from_model(from, time, influencer_transform(value, from, transformer));
+                input_from_model(from, time, influencer_transform(from, value, transformer));
             });
     }
 
@@ -427,8 +433,7 @@ template <typename Time> class IOModel {
         input_listeners_.push_back(listener);
     }
 
-  private: // methods
-    Dynamic influencer_transform(const Dynamic& value, const std::string& influencer,
+    Dynamic influencer_transform(const std::string& influencer, const Dynamic& value,
                                  const std::function<Dynamic(const Dynamic&)> transformer) {
         try {
             return transformer(value);
@@ -560,20 +565,36 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
-    // IOModel<Time>& model_ref(const std::string& name) {
-    //     // TODO
-    //     auto it = components_.find(name);
-    //     if (it == components_.end()) {
-    //         std::stringstream s;
-    //         s << "Model " << this->name() << " influenced by non-existing model: " << name;
-    //         throw std::runtime_error(s.str());
-    //     }
+    IOModel<Time>& model_ref(const std::string& name) {
+        auto it = components_.find(name);
+        if (it == components_.end()) {
+            std::stringstream s;
+            s << "Model " << this->name() << " influenced by non-existing model: " << name;
+            throw std::runtime_error(s.str());
+        }
 
-    //     return it->second;
-    // }
+        return *it->second;
+    }
 
-    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& influencers) {
+    void connect_output_influencers(const Devs::Model::Influencers& influencer) {
         // TODO
+        for (const auto& [name, maybe_transformer] : influencer) {
+            const auto transformer = IOModel<Time>::get_transformer(maybe_transformer);
+            model_ref(name).add_output_listener(
+                [this, transformer](const std::string& from, const Time&, const Dynamic& value) {
+                    this->output(this->influencer_transform(from, value, transformer));
+                });
+        }
+    }
+
+    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& model_influencers) {
+        // TODO
+        for (const auto& [name, influencers] : model_influencers) {
+            if (name == this->name()) {
+                connect_output_influencers(influencers);
+                continue;
+            }
+        }
     }
 
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>
@@ -611,7 +632,7 @@ constexpr double INF = std::numeric_limits<double>::infinity();
 } // namespace Const
 //----------------------------------------------------------------------------------------------------------------------
 namespace Printer {
-template <typename Time = double> class Base {
+template <typename Time = double, typename Step = std::uint64_t> class Base {
 
   public: // ctors, dtor
     explicit Base(std::ostream& stream = std::cout) : s_{stream} {}
@@ -620,14 +641,14 @@ template <typename Time = double> class Base {
     virtual ~Base() = default;
 
   public: // static functions
-    static std::unique_ptr<Base<Time>> create(std::ostream& stream = std::cout) {
-        return std::make_unique<Base<Time>>(stream);
+    static std::unique_ptr<Base<Time, Step>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Base<Time, Step>>(stream);
     }
 
   public: // methods
     // sim
     virtual void on_sim_start(const Time&) {}
-    virtual void on_sim_step(const Time&) {}
+    virtual void on_sim_step(const Time&, const Step&) {}
     virtual void on_sim_end(const Time&) {}
     // calendar/events
     virtual void on_time_advanced(const Time&, const Time&) {}
@@ -640,21 +661,21 @@ template <typename Time = double> class Base {
     std::ostream& s_;
 };
 
-template <typename Time = double> class Verbose : public Base<Time> {
+template <typename Time = double, typename Step = std::uint64_t> class Verbose : public Base<Time, Step> {
 
   public: // ctors, dtor
-    explicit Verbose(std::ostream& stream = std::cout) : Base<Time>{stream} {}
+    explicit Verbose(std::ostream& stream = std::cout) : Base<Time, Step>{stream} {}
 
   public: // static functions
-    static std::unique_ptr<Verbose<Time>> create(std::ostream& stream = std::cout) {
-        return std::make_unique<Verbose<Time>>(stream);
+    static std::unique_ptr<Verbose<Time, Step>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<Verbose<Time, Step>>(stream);
     }
 
   public: // methods
     // sim
     void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
-    void on_sim_step(const Time& time) override {
-        this->s_ << prefix(time) << "---------------------"
+    void on_sim_step(const Time& time, const Step& step) override {
+        this->s_ << prefix(time) << "Step " << step << "---------------------"
                  << "\n";
     }
     void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
@@ -690,11 +711,11 @@ template <typename Time = double> class Verbose : public Base<Time> {
 };
 } // namespace Printer
 //----------------------------------------------------------------------------------------------------------------------
-template <typename Time = double> class Simulator {
+template <typename Time = double, typename Step = std::uint64_t> class Simulator {
   public: // ctors, dtor
     explicit Simulator(const std::string model_name, const Devs::Model::Compound<Time> model, const Time start_time,
                        const Time end_time,
-                       std::unique_ptr<Printer::Base<Time>> printer = Printer::Verbose<Time>::create())
+                       std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::Verbose<Time, Step>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
           model_{Devs::_impl::CompoundImpl<Time>{model_name, model, p_calendar_.get()}},
           p_printer_{std::move(printer)} {
@@ -710,10 +731,11 @@ template <typename Time = double> class Simulator {
     }
 
     void run(const Time& time_epsilon = 0.001) {
+        std::uint64_t step{};
         p_printer_->on_sim_start(p_calendar_->time());
         while (p_calendar_->execute_next(model_.select(), time_epsilon)) {
-
-            p_printer_->on_sim_step(p_calendar_->time());
+            p_printer_->on_sim_step(p_calendar_->time(), step);
+            ++step;
         }
         p_printer_->on_sim_end(p_calendar_->time());
     }
@@ -742,7 +764,7 @@ template <typename Time = double> class Simulator {
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
     Devs::_impl::CompoundImpl<Time> model_;
-    std::unique_ptr<Devs::Printer::Base<Time>> p_printer_;
+    std::unique_ptr<Devs::Printer::Base<Time, Step>> p_printer_;
 };
 //----------------------------------------------------------------------------------------------------------------------
 } // namespace Devs
