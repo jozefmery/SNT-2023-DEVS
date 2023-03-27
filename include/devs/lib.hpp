@@ -393,6 +393,12 @@ template <typename Time> class IOModel {
                                    name(), "influencer input"});
     }
 
+    void direct_input(const std::string& from, const Dynamic& value,
+                      const Devs::Model::Transformer& transformer) const {
+        invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
+                                                             influencer_transform(from, value, transformer));
+    }
+
     void external_input(const Time& time, const Dynamic& value) const {
         schedule_event(Event<Time>{
             time,
@@ -605,7 +611,7 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
     void connect_component_to_compound_input(const IOModel<Time>* p_component,
                                              const Devs::Model::Transformer& transformer) {
         this->add_input_listener([this, p_component, transformer](const std::string&, const Dynamic& value) {
-            p_component->input_from_influencer(this->name(), this->calendar_time(), value, transformer);
+            p_component->direct_input(this->name(), value, transformer);
         });
     }
 
