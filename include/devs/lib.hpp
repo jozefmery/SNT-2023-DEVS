@@ -244,7 +244,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
 
         advance_time(time, time_epsilon);
-        execute_concurrent_events(std::move(events), select);
+        execute_concurrent_events(std::move(events), select, time_epsilon);
         return true;
     }
 
@@ -313,12 +313,9 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
     void execute_concurrent_events(std::vector<Event<Time>> events,
-                                   const std::function<std::string(const std::vector<std::string>&)> select) {
-        // empty handled in execute_next
-        if (events.size() == 1) {
-            execute_event_action(events[0]);
-            return;
-        }
+                                   const std::function<std::string(const std::vector<std::string>&)> select,
+                                   const Time& time_epsilon) {
+
         std::vector<std::string> names;
         for (const auto event : events) {
             names.push_back(event.model());
@@ -335,11 +332,15 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
             // check if other concurrent events did not cancel this event
             if (!event.is_cancelled()) {
                 execute_event_action(event);
+                while (const auto new_concurrent = next_pending_concurrent_event(event.time(), time_epsilon)) {
+                    events.push_back(*new_concurrent);
+                    names.push_back(new_concurrent->model());
+                }
             }
             events.erase(events.begin() + idx);
-            names.erase(name_it);
+            names.erase(names.begin() + idx);
         }
-
+        // empty handled in execute_next
         execute_event_action(events[0]);
     }
 
