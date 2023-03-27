@@ -189,7 +189,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
   public: // ctors, dtor
     explicit Calendar(const Time start_time, const Time end_time)
         : CalendarBase<Time>{EventSorter<Time>{}}, time_{start_time}, end_time_{end_time}, time_advanced_listeners_{},
-          event_scheduled_listeners_{}, event_action_executed_listeners_{} {}
+          event_scheduled_listeners_{}, executing_event_action_listeners_{} {}
 
   public: // methods
     const Time& time() const { return time_; }
@@ -239,11 +239,11 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 
         if (time > end_time_) {
             // always finish at the ending time
-            advance_time(end_time_);
+            advance_time(end_time_, time_epsilon);
             return false;
         }
 
-        advance_time(time);
+        advance_time(time, time_epsilon);
         execute_concurrent_events(std::move(events), select);
         return true;
     }
@@ -256,8 +256,8 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         event_scheduled_listeners_.push_back(listener);
     }
 
-    void add_event_action_executed_listener(const Listener<const Time&, const Event<Time>&> listener) {
-        event_action_executed_listeners_.push_back(listener);
+    void add_executing_event_action_listener(const Listener<const Time&, const Event<Time>&> listener) {
+        executing_event_action_listeners_.push_back(listener);
     }
 
   private: // methods
@@ -331,7 +331,11 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
                 throw std::runtime_error(std::string("Invalid model name returned by select: ") + name);
             }
             const auto idx = std::distance(names.begin(), name_it);
-            execute_event_action(events[idx]);
+            const auto& event = events[idx];
+            // check if other concurrent events did not cancel this event
+            if (!event.is_cancelled()) {
+                execute_event_action(event);
+            }
             events.erase(events.begin() + idx);
             names.erase(name_it);
         }
@@ -340,13 +344,15 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
     void execute_event_action(const Event<Time>& event) {
+        invoke_listeners<const Time&, const Event<Time>&>(executing_event_action_listeners_, time(), event);
         event.action();
-        invoke_listeners<const Time&, const Event<Time>&>(event_action_executed_listeners_, time(), event);
     }
 
-    void advance_time(const Time& time) {
-        invoke_listeners<const Time&, const Time&>(time_advanced_listeners_, time_, time);
-        time_ = time;
+    void advance_time(const Time& time, const Time& epsilon) {
+        if (std::abs(time - time_) > epsilon) {
+            invoke_listeners<const Time&, const Time&>(time_advanced_listeners_, time_, time);
+            time_ = time;
+        }
     }
 
   private: // members
@@ -354,14 +360,14 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     Time end_time_;
     Listeners<const Time&, const Time&> time_advanced_listeners_;
     Listeners<const Time&, const Event<Time>&> event_scheduled_listeners_;
-    Listeners<const Time&, const Event<Time>&> event_action_executed_listeners_;
+    Listeners<const Time&, const Event<Time>&> executing_event_action_listeners_;
 };
 
 template <typename Time> class IOModel {
 
   public: // ctors, dtor
     explicit IOModel(const std::string name, Calendar<Time>* p_calendar)
-        : name_{name}, p_calendar_{p_calendar}, input_listeners_{}, output_listeners_{}, state_transition_listeners_{} {
+        : state_transition_listeners_{}, name_{name}, p_calendar_{p_calendar}, input_listeners_{}, output_listeners_{} {
     }
 
     virtual ~IOModel() = default;
@@ -370,6 +376,8 @@ template <typename Time> class IOModel {
     const std::string& name() const { return name_; }
 
     virtual const std::function<std::string(const std::vector<std::string>&)> select() const = 0;
+    virtual void add_state_transition_listener(
+        const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) = 0;
 
     void input_from_influencer(const std::string& from, const Time& time, const Dynamic& value,
                                const Devs::Model::Transformer& transformer) const {
@@ -393,11 +401,6 @@ template <typename Time> class IOModel {
 
     void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
         output_listeners_.push_back(listener);
-    }
-
-    void add_state_transition_listener(
-        const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) {
-        state_transition_listeners_.push_back(listener);
     }
 
   protected: // methods
@@ -434,12 +437,14 @@ template <typename Time> class IOModel {
         }
     }
 
+  protected: // members
+    Listeners<const std::string&, const Time&, const std::string&, const std::string&> state_transition_listeners_;
+
   private: // members
     std::string name_;
     Calendar<Time>* p_calendar_;
     Listeners<const std::string&, const Dynamic&> input_listeners_;
     Listeners<const std::string&, const Time&, const Dynamic&> output_listeners_;
-    Listeners<const std::string&, const Time&, const std::string&, const std::string&> state_transition_listeners_;
 };
 
 template <typename X, typename Y, typename S, typename Time> class AtomicImpl : public IOModel<Time> {
@@ -467,6 +472,11 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
   private: // methods
     const std::function<std::string(const std::vector<std::string>&)> select() const override {
         return Devs::Model::Compound<Time>::fifo_selector;
+    }
+
+    void add_state_transition_listener(
+        const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) override {
+        this->state_transition_listeners_.push_back(listener);
     }
 
     const S& state() const { return model_.s; }
@@ -549,6 +559,13 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
 
   public: // methods
     const std::function<std::string(const std::vector<std::string>&)> select() const override { return select_; }
+
+    void add_state_transition_listener(
+        const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) override {
+        for (auto& [_, component] : components_) {
+            component->add_state_transition_listener(listener);
+        }
+    }
 
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
@@ -683,7 +700,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Base {
     // calendar/events
     virtual void on_time_advanced(const Time&, const Time&) {}
     virtual void on_event_scheduled(const Time&, const Devs::_impl::Event<Time>&) {}
-    virtual void on_event_action_executed(const Time&, const Devs::_impl::Event<Time>&) {}
+    virtual void on_executing_event_action(const Time&, const Devs::_impl::Event<Time>&) {}
     // model
     virtual void on_model_state_transition(const std::string&, const Time&, const std::string&, const std::string&) {}
 
@@ -716,8 +733,8 @@ template <typename Time = double, typename Step = std::uint64_t> class Verbose :
     void on_event_scheduled(const Time& time, const Devs::_impl::Event<Time>& event) override {
         this->s_ << prefix(time) << "Event scheduled: " << event.to_string() << "\n";
     }
-    void on_event_action_executed(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time) << "Event action executed: " << event.to_string() << "\n";
+    void on_executing_event_action(const Time& time, const Devs::_impl::Event<Time>& event) override {
+        this->s_ << prefix(time) << "Executing event action: " << event.to_string() << "\n";
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
@@ -747,22 +764,22 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
                        const Time start_time, const Time end_time,
                        std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::Verbose<Time, Step>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time)},
-          model_{model(model_name, p_calendar_.get())}, p_printer_{std::move(printer)} {
+          p_model_{model(model_name, p_calendar_.get())}, p_printer_{std::move(printer)} {
         setup_event_listeners();
     }
 
   public: // methods
-    void schedule_model_input(const Time& time, const Dynamic& value) { model_->external_input(time, value); }
+    void schedule_model_input(const Time& time, const Dynamic& value) { p_model_->external_input(time, value); }
 
     void
     add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
-        model_->add_output_listener(listener);
+        p_model_->add_output_listener(listener);
     }
 
     void run(const Time& time_epsilon = 0.001) {
         std::uint64_t step{};
         p_printer_->on_sim_start(p_calendar_->time());
-        while (p_calendar_->execute_next(model_->select(), time_epsilon)) {
+        while (p_calendar_->execute_next(p_model_->select(), time_epsilon)) {
             p_printer_->on_sim_step(p_calendar_->time(), step);
             ++step;
         }
@@ -776,24 +793,19 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
         p_calendar_->add_event_scheduled_listener([this](const Time& time, const Devs::_impl::Event<Time>& event) {
             p_printer_->on_event_scheduled(time, event);
         });
-        p_calendar_->add_event_action_executed_listener(
+        p_calendar_->add_executing_event_action_listener(
             [this](const Time& time, const Devs::_impl::Event<Time>& event) {
-                p_printer_->on_event_action_executed(time, event);
+                p_printer_->on_executing_event_action(time, event);
             });
-        // no need attach state transition listener to compound model as it has no state transitions (or state)
-        // TODO
-        // for (auto& pair : model_.components()) {
-        //     auto& p_component = pair.second;
-        //     p_component->add_state_transition_listener(
-        //         [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
-        //             p_printer_->on_model_state_transition(name, time, prev, next);
-        //         });
-        // }
+        p_model_->add_state_transition_listener(
+            [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
+                p_printer_->on_model_state_transition(name, time, prev, next);
+            });
     }
 
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
-    std::unique_ptr<Devs::_impl::IOModel<Time>> model_;
+    std::unique_ptr<Devs::_impl::IOModel<Time>> p_model_;
     std::unique_ptr<Devs::Printer::Base<Time, Step>> p_printer_;
 };
 //----------------------------------------------------------------------------------------------------------------------
