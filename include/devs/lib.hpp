@@ -27,9 +27,10 @@ template <typename T> class Box;
 template <typename Time> class Calendar;
 template <typename Time> class IOModel;
 template <typename Time>
-using AbstractAtomicFactory =
+using AbstractModelFactory =
     std::function<std::unique_ptr<Devs::_impl::IOModel<Time>>(const std::string, Devs::_impl::Calendar<Time>*)>;
 template <typename X, typename Y, typename S, typename Time> class AtomicImpl;
+template <typename Time> class CompoundImpl;
 
 class IBox {
 
@@ -74,7 +75,7 @@ namespace Model {
 template <typename X, typename Y, typename S, typename Time = double> struct Atomic {
 
   public: // methods
-    operator Devs::_impl::AbstractAtomicFactory<Time>() {
+    operator Devs::_impl::AbstractModelFactory<Time>() {
         const auto copy = *this;
         return [copy](const std::string name, Devs::_impl::Calendar<Time>* p_calendar) {
             return std::make_unique<Devs::_impl::AtomicImpl<X, Y, S, Time>>(name, copy, p_calendar);
@@ -96,8 +97,16 @@ template <typename Time> struct Compound {
   public: // static functions
     static std::string fifo_selector(const std::vector<std::string>& names) { return names[0]; }
 
+  public: // methods
+    operator Devs::_impl::AbstractModelFactory<Time>() {
+        const auto copy = *this;
+        return [copy](const std::string name, Devs::_impl::Calendar<Time>* p_calendar) {
+            return std::make_unique<Devs::_impl::CompoundImpl<Time>>(name, copy, p_calendar);
+        };
+    }
+
   public: // members
-    std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>> components;
+    std::unordered_map<std::string, Devs::_impl::AbstractModelFactory<Time>> components;
     std::unordered_map<std::string, Influencers> influencers;
     std::function<std::string(const std::vector<std::string>&)> select = fifo_selector;
 };
@@ -258,12 +267,12 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
     }
 
-    std::optional<const Event<Time>&> next_pending_event_ref() {
+    const Event<Time>* next_pending_event_ref() {
         pop_cancelled_events();
         if (this->empty()) {
-            return {};
+            return nullptr;
         }
-        return this->top();
+        return std::addressof(this->top());
     }
 
     std::optional<Event<Time>> next_pending_event() {
@@ -277,9 +286,9 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         return event;
     }
 
-    bool has_next_pending_event() const { return next_pending_event_ref(); }
+    bool has_next_pending_event() { return next_pending_event_ref() != nullptr; }
 
-    bool is_next_pending_event_concurrent(const Time& time, const Time& time_epsilon) const {
+    bool is_next_pending_event_concurrent(const Time& time, const Time& time_epsilon) {
         return has_next_pending_event() && std::abs(next_pending_event_ref()->time() - time) <= time_epsilon;
     }
 
@@ -295,9 +304,9 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         if (!event) {
             return {};
         }
-        std::vector<Event<Time>> concurrent_events{event};
-        while (const auto concurrent_event = next_pending_concurrent_event(event.time(), time_epsilon)) {
-            concurrent_events.push_back(concurrent_event);
+        std::vector<Event<Time>> concurrent_events{*event};
+        while (const auto concurrent_event = next_pending_concurrent_event(event->time(), time_epsilon)) {
+            concurrent_events.push_back(*concurrent_event);
         }
 
         return concurrent_events;
@@ -312,7 +321,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
         std::vector<std::string> names;
         for (const auto event : events) {
-            names.push_back(event.name());
+            names.push_back(event.model());
         }
 
         while (events.size() > 1) {
@@ -359,13 +368,10 @@ template <typename Time> class IOModel {
     const std::string& name() const { return name_; }
 
     void external_input(const Time& time, const Dynamic& value) const {
-        // TODO
-        schedule_event(Event<Time>{time,
-                                   [this, from, &value]() {
-                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, "",
-                                                                                            value);
-                                   },
-                                   name(), "external input"});
+        schedule_event(Event<Time>{
+            time,
+            [this, &value]() { invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, name(), value); },
+            name(), "external input"});
     }
 
     void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
@@ -540,7 +546,6 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         : IOModel<Time>{name, p_calendar}, select_{model.select},
           components_{factories_to_components(model.components, p_calendar)} {
         connect_components(model.influencers);
-        // TODO add input event listener
     }
 
     // TODO
@@ -555,27 +560,24 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
   private: // methods
-    IOModel<Time>& model_ref(const std::string& name) {
-        // TODO
-        // if (this->name() == name) {
-        //     return *this;
-        // }
-        // auto it = components_.find(name);
-        // if (it == components_.end()) {
-        //     std::stringstream s;
-        //     s << "Model " << this->name() << " influenced by non-existing model: " << name;
-        //     throw std::runtime_error(s.str());
-        // }
+    // IOModel<Time>& model_ref(const std::string& name) {
+    //     // TODO
+    //     auto it = components_.find(name);
+    //     if (it == components_.end()) {
+    //         std::stringstream s;
+    //         s << "Model " << this->name() << " influenced by non-existing model: " << name;
+    //         throw std::runtime_error(s.str());
+    //     }
 
-        // return it->second;
-    }
+    //     return it->second;
+    // }
 
     void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& influencers) {
         // TODO
     }
 
     std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>
-    factories_to_components(const std::unordered_map<std::string, Devs::_impl::AbstractAtomicFactory<Time>>& factories,
+    factories_to_components(const std::unordered_map<std::string, Devs::_impl::AbstractModelFactory<Time>>& factories,
                             Calendar<Time>* p_calendar) {
 
         if (factories.empty()) {
@@ -584,9 +586,6 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
 
         std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>> components{};
         for (const auto& [name, factory] : factories) {
-            if (name == this->name()) {
-                throw std::runtime_error("Component has same name as compound model " + name);
-            }
             components[name] = factory(name, p_calendar);
         }
 
@@ -654,8 +653,10 @@ template <typename Time = double> class Verbose : public Base<Time> {
   public: // methods
     // sim
     void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
-    // TODO
-    // void on_sim_step(const Time& time) override { this->s_ << prefix(time) << "\n"; }
+    void on_sim_step(const Time& time) override {
+        this->s_ << prefix(time) << "---------------------"
+                 << "\n";
+    }
     void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
@@ -701,19 +702,19 @@ template <typename Time = double> class Simulator {
     }
 
   public: // methods
-    // TODO
     void schedule_model_input(const Time& time, const Dynamic& value) { model_.external_input(time, value); }
 
-    // void
-    // add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener)
-    // {
-    //     model_.add_output_listener(listener);
-    // }
+    void
+    add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
+        model_.add_output_listener(listener);
+    }
 
     void run(const Time& time_epsilon = 0.001) {
         p_printer_->on_sim_start(p_calendar_->time());
-        while (p_calendar_->execute_next(model_.select(), time_epsilon))
-            ;
+        while (p_calendar_->execute_next(model_.select(), time_epsilon)) {
+
+            p_printer_->on_sim_step(p_calendar_->time());
+        }
         p_printer_->on_sim_end(p_calendar_->time());
     }
 
