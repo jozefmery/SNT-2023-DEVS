@@ -367,10 +367,23 @@ template <typename Time> class IOModel {
   public: // methods
     const std::string& name() const { return name_; }
 
+    void input_from_influencer(const std::string& from, const Time& time, const Dynamic& value,
+                               const Devs::Model::Transformer& transformer) const {
+        if (from == name()) {
+            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
+        }
+        schedule_event(Event<Time>{time,
+                                   [this, from, value, transformer]() {
+                                       invoke_listeners<const std::string&, const Dynamic&>(
+                                           input_listeners_, from, influencer_transform(from, value, transformer));
+                                   },
+                                   name(), "influencer input"});
+    }
+
     void external_input(const Time& time, const Dynamic& value) const {
         schedule_event(Event<Time>{
             time,
-            [this, &value]() { invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, name(), value); },
+            [this, value]() { invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, name(), value); },
             name(), "external input"});
     }
 
@@ -385,18 +398,6 @@ template <typename Time> class IOModel {
 
   protected: // methods
     void schedule_event(const Event<Time> event) const { p_calendar_->schedule_event(event); }
-
-    void input_from_model(const std::string& from, const Time& time, const Dynamic& value) const {
-        if (from == name()) {
-            throw std::runtime_error("Model " + name() + " contains a forbidden self-influence loop");
-        }
-        schedule_event(Event<Time>{time,
-                                   [this, from, &value]() {
-                                       invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from,
-                                                                                            value);
-                                   },
-                                   name(), "input"});
-    }
 
     const Time& calendar_time() const { return p_calendar_->time(); }
 
@@ -416,7 +417,7 @@ template <typename Time> class IOModel {
     }
 
     Dynamic influencer_transform(const std::string& influencer, const Dynamic& value,
-                                 const std::optional<std::function<Dynamic(const Dynamic&)>> transformer) {
+                                 const std::optional<std::function<Dynamic(const Dynamic&)>> transformer) const {
         try {
             if (transformer) {
                 return (*transformer)(value);
@@ -581,9 +582,11 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         }
     }
 
-    void connect_component_to_compound_input(const std::string& component_name,
+    void connect_component_to_compound_input(const IOModel<Time>* p_component,
                                              const Devs::Model::Transformer& transformer) {
-        // TODO
+        this->add_input_listener([this, p_component, transformer](const std::string&, const Dynamic& value) {
+            p_component->input_from_influencer(this->name(), this->calendar_time(), value, transformer);
+        });
     }
 
     void connect_component_influencers(const std::string& component_name, const Devs::Model::Influencers& influencers) {
@@ -600,15 +603,15 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
             }
 
             if (influencer == this->name()) {
-                connect_component_to_compound_input(component_name, transformer);
+                connect_component_to_compound_input(p_component, transformer);
                 continue;
             }
 
-            connect_component_output_listener(influencer, [p_component, transformer](const std::string& from,
-                                                                                     const Time& time,
-                                                                                     const Dynamic& value) {
-                p_component->input_from_model(from, time, p_component->influencer_transform(from, value, transformer))
-            });
+            connect_component_output_listener(
+                influencer,
+                [p_component, transformer](const std::string& from, const Time& time, const Dynamic& value) {
+                    p_component->input_from_influencer(from, time, value, transformer);
+                });
         }
     }
 
