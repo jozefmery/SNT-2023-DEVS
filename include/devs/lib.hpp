@@ -277,7 +277,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 
     std::optional<Event<Time>> next_pending_event() {
         const auto next = next_pending_event_ref();
-        if (!next) {
+        if (next == nullptr) {
             return {};
         }
         // create copy from reference before deleting
@@ -322,6 +322,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
         }
 
         while (events.size() > 1) {
+
             const auto name = select(names);
             const auto name_it = std::find(names.begin(), names.end(), name);
             if (name_it == names.end()) {
@@ -340,8 +341,11 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
             events.erase(events.begin() + idx);
             names.erase(names.begin() + idx);
         }
-        // empty handled in execute_next
-        execute_event_action(events[0]);
+        if (!events[0].is_cancelled()) {
+
+            // empty handled in execute_next
+            execute_event_action(events[0]);
+        }
     }
 
     void execute_event_action(const Event<Time>& event) {
@@ -741,7 +745,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Verbose :
         this->s_ << prefix(time) << "Event scheduled: " << event.to_string() << "\n";
     }
     void on_executing_event_action(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time) << "Executing event action: " << event.to_string() << "\n";
+        this->s_ << prefix(time) << "Executing event action: " << event.to_string(true, true) << "\n";
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
