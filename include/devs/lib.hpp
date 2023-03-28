@@ -91,7 +91,7 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
 };
 
 using Transformer = std::optional<std::function<Dynamic(const Dynamic&)>>;
-using Influencers = std::unordered_map<std::string, Transformer>;
+using Influencers = std::unordered_map<std::optional<std::string>, Transformer>;
 
 template <typename Time> struct Compound {
   public: // static functions
@@ -111,7 +111,7 @@ template <typename Time> struct Compound {
 
   public: // members
     std::unordered_map<std::string, AbstractModelFactory<Time>> components;
-    std::unordered_map<std::string, Influencers> influencers;
+    std::unordered_map<std::optional<std::string>, Influencers> influencers;
     std::function<std::string(const std::vector<std::string>&)> select = fifo_selector;
 };
 } // namespace Model
@@ -616,9 +616,11 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
 
     void connect_compound_output_influencers(const Devs::Model::Influencers& influencers) {
         for (const auto& [name, transformer] : influencers) {
-
+            if (name == std::nullopt) {
+                throw std::runtime_error("Compound model " + this->name() + " cannot influence itself");
+            }
             connect_component_output_listener(
-                name, [this, transformer](const std::string& from, const Time&, const Dynamic& value) {
+                *name, [this, transformer](const std::string& from, const Time&, const Dynamic& value) {
                     this->output(this->influencer_transform(from, value, transformer));
                 });
         }
@@ -640,30 +642,31 @@ template <typename Time = double> class CompoundImpl : public IOModel<Time> {
         }
 
         for (const auto& [influencer, transformer] : influencers) {
-            if (component_name == influencer) {
-                throw std::runtime_error("Component " + component_name + " contains a forbidden self-influence loop");
-            }
-
-            if (influencer == this->name()) {
+            if (influencer == std::nullopt) {
                 connect_component_to_compound_input(p_component, transformer);
                 continue;
             }
 
+            if (component_name == *influencer) {
+                throw std::runtime_error("Component " + component_name + " contains a forbidden self-influence loop");
+            }
+
             connect_component_output_listener(
-                influencer,
+                *influencer,
                 [p_component, transformer](const std::string& from, const Time& time, const Dynamic& value) {
                     p_component->input_from_influencer(from, time, value, transformer);
                 });
         }
     }
 
-    void connect_components(const std::unordered_map<std::string, Devs::Model::Influencers>& model_influencers) {
+    void connect_components(
+        const std::unordered_map<std::optional<std::string>, Devs::Model::Influencers>& model_influencers) {
         for (const auto& [component, influencers] : model_influencers) {
-            if (component == this->name()) {
+            if (component) {
+                connect_component_influencers(*component, influencers);
+            } else {
                 connect_compound_output_influencers(influencers);
-                continue;
             }
-            connect_component_influencers(component, influencers);
         }
     }
 
