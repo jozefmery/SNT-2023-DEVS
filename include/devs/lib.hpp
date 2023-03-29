@@ -513,6 +513,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
 
     Time time_advance() const { return model_.ta(state()); }
 
+    Time internal_transition_time() const { return this->calendar_time() + time_advance(); }
+
     Y internal_transition() {
         // get output from current state
         const auto out = model_.out(state());
@@ -537,8 +539,8 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
     void schedule_internal_transition() {
-        const auto event = Devs::_impl::Event<Time>{time_advance(), get_internal_transition_action(), this->name(),
-                                                    "internal transition"};
+        const auto event = Devs::_impl::Event<Time>{internal_transition_time(), get_internal_transition_action(),
+                                                    this->name(), "internal transition"};
         cancel_internal_transition_ = event.get_cancel_callback();
         this->schedule_event(event);
     }
@@ -793,8 +795,10 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
                        const Time start_time, const Time end_time, const Time& time_epsilon = 0.001,
                        std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::Verbose<Time, Step>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time, time_epsilon)},
-          p_model_{model(model_name, p_calendar_.get())}, p_printer_{std::move(printer)} {
-        setup_event_listeners();
+          p_printer_{std::move(printer)} {
+        setup_calendar_listeners();
+        p_model_ = model(model_name, p_calendar_.get());
+        setup_model_listeners();
     }
 
   public: // methods
@@ -816,7 +820,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
     }
 
   private: // methods
-    void setup_event_listeners() {
+    void setup_calendar_listeners() {
         p_calendar_->add_time_advanced_listener(
             [this](const Time& prev, const Time& next) { p_printer_->on_time_advanced(prev, next); });
         p_calendar_->add_event_scheduled_listener([this](const Time& time, const Devs::_impl::Event<Time>& event) {
@@ -826,6 +830,9 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
             [this](const Time& time, const Devs::_impl::Event<Time>& event) {
                 p_printer_->on_executing_event_action(time, event);
             });
+    }
+
+    void setup_model_listeners() {
         p_model_->add_state_transition_listener(
             [this](const std::string& name, const Time& time, const std::string& prev, const std::string& next) {
                 p_printer_->on_model_state_transition(name, time, prev, next);
@@ -834,8 +841,8 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
 
   private: // members
     std::unique_ptr<Devs::_impl::Calendar<Time>> p_calendar_;
-    std::unique_ptr<Devs::_impl::IOModel<Time>> p_model_;
     std::unique_ptr<Devs::Printer::Base<Time, Step>> p_printer_;
+    std::unique_ptr<Devs::_impl::IOModel<Time>> p_model_;
 };
 //----------------------------------------------------------------------------------------------------------------------
 } // namespace Devs
