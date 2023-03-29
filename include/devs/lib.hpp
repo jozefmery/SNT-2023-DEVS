@@ -1,7 +1,7 @@
 /*
  *  Project:    SNT DEVS 2023
  *  Author:     Bc. Jozef Méry - xmeryj00@vutbr.cz
- *  Date:       28.03.2023
+ *  Date:       31.03.2023
  */
 #pragma once
 //----------------------------------------------------------------------------------------------------------------------
@@ -36,8 +36,9 @@ class IBox {
     virtual ~IBox() = default;
 
   public: // static functions
+    virtual std::unique_ptr<IBox> copy() const = 0;
     template <typename T> static T& ref(IBox& box) { return (dynamic_cast<Box<T>&>(box)).ref(); }
-    template <typename T> static T get(const IBox& box) { return (dynamic_cast<const Box<T>&>(box)).value(); }
+    template <typename T> static T value(const IBox& box) { return (dynamic_cast<const Box<T>&>(box)).value(); }
 };
 
 template <typename T> class Box : public IBox {
@@ -45,9 +46,10 @@ template <typename T> class Box : public IBox {
     Box(const T value) : value_{value} {}
 
   public: // static functions
-    static std::shared_ptr<IBox> create(const T value) { return std::make_shared<Box<T>>(value); }
+    static std::unique_ptr<IBox> create(const T value) { return std::make_unique<Box<T>>(value); }
 
   public: // methods
+    std::unique_ptr<IBox> copy() const override { return create(value_); }
     T& ref() { return value_; }
     T value() const { return value_; }
 
@@ -60,15 +62,16 @@ class Dynamic {
   public: // ctors, dtor
           // implicit wrapping for any copyable type
     template <typename T> Dynamic(const T value) : p_box_{Devs::_impl::Box<T>::create(value)} {}
+    // always create unique
+    Dynamic(const Dynamic& other) : p_box_{other.p_box_->copy()} {}
 
   public: // methods
-    template <typename T> operator T() const { return get<T>(); }
-    template <typename T> T get() const { return Devs::_impl::IBox::get<T>(*p_box_); }
     template <typename T> T& ref() { return Devs::_impl::IBox::ref<T>(*p_box_); }
-    template <typename T> Dynamic copy() { return get<T>(); }
+    template <typename T> T value() const { return Devs::_impl::IBox::value<T>(*p_box_); }
+    template <typename T> operator T() const { return value<T>(); }
 
   private: // members
-    std::shared_ptr<Devs::_impl::IBox> p_box_;
+    std::unique_ptr<Devs::_impl::IBox> p_box_;
 };
 //----------------------------------------------------------------------------------------------------------------------
 namespace Model {

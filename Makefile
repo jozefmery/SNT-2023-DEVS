@@ -1,5 +1,5 @@
 #	File:    Makefile
-#	Date:    05.03.2023
+#	Date:    30.03.2023
 # Project: SNT
 #	Author:  Bc. Jozef Méry - xmeryj00@vut.cz
 
@@ -7,11 +7,7 @@
 # $< - first dep
 # $^ - all deps
 
-LOGIN = xmeryj00
-
-# final archive name
-ARCHIVEEXT  = zip
-ARCHIVE     = $(LOGIN).$(ARCHIVEEXT)
+ARCHIVE     = xmeryj00-snt-devs-2023.zip
 
 # directory definitions
 BINDIR      = bin
@@ -24,10 +20,9 @@ ARCHIVELIST = $(SRCDIR)/ $(INCLUDEDIR)/ Makefile README.txt
 
 # helper programs
 ARCHIVER  = zip -r
-DIRMAKER  = @mkdir -p
 
 # target name
-TARGET    = devs
+TARGET    = devs_app
 
 # file extensions
 SRCEXT    = cpp
@@ -41,7 +36,7 @@ CFLAGS      = -pedantic -Wextra -Wall $(PLATFORM)
 RELCFLAGS   = -O2 -s -DNDEBUG -flto
 DCFLAGS     = -g -O0
 STD         = c++17
-# EXTRACFLAGS = -Werror
+EXTRACFLAGS = -Werror
 
 # additional includes
 INCLUDES  = $(addprefix -I,)
@@ -61,41 +56,33 @@ RELDIR  = Release
 DDIR    = Debug
 
 # fetch sources
-SOURCES  = $(wildcard $(SRCDIR)/*.$(SRCEXT))
+SOURCES  = $(wildcard $(SRCDIR)/*.$(SRCEXT)) $(wildcard $(SRCDIR)/**/*.$(SRCEXT))
 # convert to obj name
 RELOBJECTS  = $(patsubst $(SRCDIR)/%.$(SRCEXT), $(OBJDIR)/$(RELDIR)/%.$(OBJEXT), $(SOURCES))
-DOBJECTS  = $(patsubst $(SRCDIR)/%.$(SRCEXT), $(OBJDIR)/$(DDIR)/%.$(OBJEXT), $(SOURCES))
+DOBJECTS  	= $(patsubst $(SRCDIR)/%.$(SRCEXT), $(OBJDIR)/$(DDIR)/%.$(OBJEXT), $(SOURCES))
 # fetch headers
-HEADERS  = $(wildcard $(INCLUDEDIR)/**/*.$(HDREXT))
+HEADERS  		= $(wildcard $(INCLUDEDIR)/**/*.$(HDREXT))
 
-# object directory target
-$(OBJDIR):
-	 $(DIRMAKER) $(OBJDIR)
-
-$(OBJDIR)/$(DDIR): $(OBJDIR)
-	$(DIRMAKER) $(OBJDIR)/$(DDIR)
-
-$(OBJDIR)/$(RELDIR): $(OBJDIR)
-	$(DIRMAKER) $(OBJDIR)/$(RELDIR)
-
-# binary directory target
-$(BINDIR):
-	$(DIRMAKER) $(BINDIR)
+CREATE_DIRECTORY	= @mkdir -p $(@D)
 
 # compile in release mode
-$(OBJDIR)/$(RELDIR)/%.$(OBJEXT): $(SRCDIR)/%.$(SRCEXT) $(HEADERS) | $(OBJDIR)/$(RELDIR)
+$(OBJDIR)/$(RELDIR)/%.$(OBJEXT): $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
+	$(CREATE_DIRECTORY)
 	$(CC) $(CFLAGS) $(EXTRACFLAGS) -I./$(INCLUDEDIR) $(INCLUDES) -std=$(STD) $(RELCFLAGS) -c $< -o $@
 
 # link release objects
-$(BINDIR)/$(TARGET): $(RELOBJECTS) | $(BINDIR)
+$(BINDIR)/$(TARGET): $(RELOBJECTS)
+	$(CREATE_DIRECTORY)
 	$(CC) $^ $(LIBS) $(LIBDIRS) $(LFLAGS) -o $@
 
 # compile in debug mode
-$(OBJDIR)/$(DDIR)/%.$(OBJEXT): $(SRCDIR)/%.$(SRCEXT) $(HEADERS) | $(OBJDIR)/$(DDIR)
+$(OBJDIR)/$(DDIR)/%.$(OBJEXT): $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
+	$(CREATE_DIRECTORY)
 	$(CC) $(CFLAGS) $(EXTRACFLAGS) -I./$(INCLUDEDIR) $(INCLUDES) -std=$(STD) $(DCFLAGS) -c $< -o $@
 
 # # link debug objects
-$(BINDIR)/$(TARGET)_d: $(DOBJECTS) | $(BINDIR)
+$(BINDIR)/$(TARGET)_d: $(DOBJECTS)
+	$(CREATE_DIRECTORY)
 	$(CC) $^ $(LIBS) $(LIBDIRS) $(LFLAGS) -o $@
 
 release: $(BINDIR)/$(TARGET)
