@@ -36,6 +36,7 @@ class IBox {
     virtual ~IBox() = default;
 
   public: // static functions
+    template <typename T> static T& ref(IBox& box) { return (dynamic_cast<Box<T>&>(box)).ref(); }
     template <typename T> static T get(const IBox& box) { return (dynamic_cast<const Box<T>&>(box)).value(); }
 };
 
@@ -47,6 +48,7 @@ template <typename T> class Box : public IBox {
     static std::shared_ptr<IBox> create(const T value) { return std::make_shared<Box<T>>(value); }
 
   public: // methods
+    T& ref() { return value_; }
     T value() const { return value_; }
 
   private: // members
@@ -62,6 +64,8 @@ class Dynamic {
   public: // methods
     template <typename T> operator T() const { return get<T>(); }
     template <typename T> T get() const { return Devs::_impl::IBox::get<T>(*p_box_); }
+    template <typename T> T& ref() { return Devs::_impl::IBox::ref<T>(*p_box_); }
+    template <typename T> Dynamic copy() { return get<T>(); }
 
   private: // members
     std::shared_ptr<Devs::_impl::IBox> p_box_;
