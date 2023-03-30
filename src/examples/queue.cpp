@@ -7,5 +7,11 @@
 #include <devs/lib.hpp>
 
 namespace Examples {
-void queue() {}
+
+Devs::Model::Compound<double> create_model() { return {{}, {}}; }
+
+void queue() {
+    auto simulator = Devs::Simulator<double>{"queue system", create_model(), 0.0, 100.0};
+    simulator.run();
+}
 } // namespace Examples

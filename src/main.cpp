@@ -8,33 +8,6 @@
 #include <examples/queue.hpp>
 #include <iostream>
 
-// double delta_external(const double& s, const double&, const double& input) { return s + input; }
-
-// double delta_internal(const double& s) { return s * 2; }
-
-// double out(const double& state) { return state * 3; }
-
-// double ta(const double& s) { return s; }
-
-// auto create_atomic() {
-
-//     return Devs::Model::Atomic<double, double, double, double>{0.5, delta_external, delta_internal, out, ta};
-// }
-
-// auto create_compound() {
-//     return Devs::Model::Compound<double>{
-//         {{"atomic", create_atomic()}},
-//         {{"atomic", {{{}, [](const Devs::Dynamic& value) { return double{value} + 1.0; }}}}, {{}, {{"atomic", {}}}}},
-//     };
-// }
-
-// auto create_compound2() {
-//     return Devs::Model::Compound<double>{
-//         {{"compound", create_compound()}},
-//         {{"compound", {{{}, {}}}}, {{}, {{"compound", {}}}}},
-//     };
-// }
-
 std::unordered_map<std::string, std::function<void()>> create_examples() { return {{"queue", Examples::queue}}; }
 
 std::vector<std::string> get_args(int argc, char* argv[]) {
@@ -75,7 +48,7 @@ void print_help(const std::vector<std::string>& example_names) {
               << "    devs [-h | --help] <example>...\n\n";
     std::cout << "Available examples: \n";
     for (const auto& example : example_names) {
-        std::cout << "  " << example << "\n";
+        std::cout << " - " << example << "\n";
     }
     std::cout << "\nAuthor: Jozef Méry\n";
 }

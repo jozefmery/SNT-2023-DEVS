@@ -100,7 +100,7 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
 using Transformer = std::optional<std::function<Dynamic(const Dynamic&)>>;
 using Influencers = std::unordered_map<std::optional<std::string>, Transformer>;
 
-template <typename Time> struct Compound {
+template <typename Time = double> struct Compound {
   public: // static functions
     static std::string fifo_selector(const std::vector<std::string>& names) {
         // guaranteed to have at least two names
@@ -580,7 +580,7 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     std::optional<std::function<void()>> cancel_internal_transition_;
 };
 
-template <typename Time = double> class CompoundImpl : public IOModel<Time> {
+template <typename Time> class CompoundImpl : public IOModel<Time> {
 
   public: // ctors, dtor
     explicit CompoundImpl(const std::string name, const Devs::Model::Compound<Time> model, Calendar<Time>* p_calendar)
@@ -717,7 +717,7 @@ constexpr double INF = std::numeric_limits<double>::infinity();
 } // namespace Const
 //----------------------------------------------------------------------------------------------------------------------
 namespace Printer {
-template <typename Time = double, typename Step = std::uint64_t> class Base {
+template <typename Time, typename Step = std::uint64_t> class Base {
 
   public: // ctors, dtor
     explicit Base(std::ostream& stream = std::cout) : s_{stream} {}
@@ -746,7 +746,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Base {
     std::ostream& s_;
 };
 
-template <typename Time = double, typename Step = std::uint64_t> class Verbose : public Base<Time, Step> {
+template <typename Time, typename Step = std::uint64_t> class Verbose : public Base<Time, Step> {
 
   public: // ctors, dtor
     explicit Verbose(std::ostream& stream = std::cout) : Base<Time, Step>{stream} {}
