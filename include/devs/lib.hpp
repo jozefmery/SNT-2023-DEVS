@@ -15,12 +15,37 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 //----------------------------------------------------------------------------------------------------------------------
 namespace Devs {
+namespace Random {
+// TODO
+using Engine = std::mt19937_64;
+
+template <typename T = double> std::function<T()> uniform(const std::optional<int> seed = {}) {
+    ;
+    Engine gen{seed ? *seed : std::random_device{}()};
+    std::uniform_real_distribution<T> dist{0.0, 1.0};
+    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+}
+
+inline std::function<int()> poisson(const double mean, const std::optional<int> seed = {}) {
+    Engine gen{seed ? *seed : std::random_device{}()};
+    std::poisson_distribution<> dist{mean};
+    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+}
+
+inline std::function<double()> exponential(const double rate, const std::optional<int> seed = {}) {
+    Engine gen{seed ? *seed : std::random_device{}()};
+    std::exponential_distribution<> dist{rate};
+    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+}
+
+} // namespace Random
 
 namespace _impl {
 // declarations
