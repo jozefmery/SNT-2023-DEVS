@@ -8,7 +8,13 @@
 #include <devs/lib.hpp>
 #include <iostream>
 
-std::unordered_map<std::string, std::function<void()>> create_examples() { return {{"queue", Examples::queue}}; }
+std::unordered_map<std::string, std::function<void()>> create_examples() {
+
+    return {{"minimal-atomic", Examples::minimal_atomic_simulation},
+            {"minimal-compound", Examples::minimal_compound_simulation},
+            {"traffic-lights", Examples::traffic_light_simulation},
+            {"queue", Examples::queue_simulation}};
+}
 
 std::vector<std::string> get_args(int argc, char* argv[]) {
     std::vector<std::string> args{};
@@ -45,7 +51,7 @@ std::optional<std::vector<std::string>> parse_arguments(const std::vector<std::s
 void print_help(const std::vector<std::string>& example_names) {
     std::cout << "Demo application for a DEVS simulation library (SNT 2023)\n"
               << "Usage: \n"
-              << "    devs [-h | --help] <example>...\n\n";
+              << "    devs [-h | --help] [<example>...]\n\n";
     std::cout << "Available examples: \n";
     for (const auto& example : example_names) {
         std::cout << " - " << example << "\n";
@@ -88,10 +94,10 @@ int main(int argc, char* argv[]) {
         if (examples_to_run->empty()) {
             // run queue example by default
             run_examples(examples, {"queue"});
-        } else {
-
-            run_examples(examples, *examples_to_run);
+            return 0;
         }
+
+        run_examples(examples, *examples_to_run);
 
     } catch (std::runtime_error& e) {
 
