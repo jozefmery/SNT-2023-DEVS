@@ -6,5 +6,8 @@
 #pragma once
 
 namespace Examples {
-void queue();
-}
+void minimal_atomic_simulation();
+void minimal_compound_simulation();
+void traffic_light_simulation();
+void queue_simulation();
+} // namespace Examples
