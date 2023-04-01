@@ -12,12 +12,33 @@ namespace Examples {
 using Simulator = Devs::Simulator<double>;
 using Compound = Devs::Model::Compound<double>;
 
-Compound create_model() { return {{}, {}}; }
+namespace _impl {
 
-// void schedule_customers(Simulator& simulator) {}
+Devs::Model::Atomic<Devs::Null, Devs::Null, Devs::Null> create_minimal_atomic() {
+    return Devs::Model::Atomic<Devs::Null, Devs::Null, Devs::Null>{
+        Devs::Null{},
+        [](const Devs::Null& s, const double&, const Devs::Null&) { return s; },
+        [](const Devs::Null& s) { return s; },
+        [](const Devs::Null&) { return Devs::Null{}; },
+        [](const Devs::Null&) { return 10; },
+    };
+}
 
-void queue() {
-    auto simulator = Simulator{"queue system", create_model(), 0.0, 100.0};
+Compound create_queue_model() { return {{}, {}}; }
+
+} // namespace _impl
+
+void minimal_atomic_simulation() {
+    Simulator simulator{"minimal atomic model", _impl::create_minimal_atomic(), 0.0, 100.0};
     simulator.run();
+}
+
+void minimal_compound_simulation() {}
+
+void traffic_light_simulation() {}
+
+void queue_simulation() {
+    // Simulator simulator{"queue system", _impl::create_queue_model(), 0.0, 100.0};
+    // simulator.run();
 }
 } // namespace Examples
