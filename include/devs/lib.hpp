@@ -100,7 +100,7 @@ template <typename T> class Box : public IBox {
 //----------------------------------------------------------------------------------------------------------------------
 struct Null {
     // empty type
-
+  public: // friends
     // << required for state printing
     friend std::ostream& operator<<(std::ostream& os, const Null&) { return os << "{}"; }
 };
