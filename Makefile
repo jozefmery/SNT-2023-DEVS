@@ -1,11 +1,13 @@
 #	File:    Makefile
-#	Date:    30.03.2023
+#	Date:    01.04.2023
 # Project: SNT
 #	Author:  Bc. Jozef Méry - xmeryj00@vut.cz
 
 # $@ - target
+# @D - target directory
 # $< - first dep
 # $^ - all deps
+# $* - auto variable
 
 ARCHIVE     = xmeryj00-snt-devs-2023.zip
 
@@ -50,7 +52,7 @@ LIBDIRS = $(addprefix -L, )
 
 default: release
 all: default
-.PHONY: default all release debug run debug-run clean-run clean archive format
+.PHONY: default all release debug run run-% debug-run clean-run clean archive format
 
 RELDIR  = Release
 DDIR    = Debug
@@ -91,6 +93,9 @@ debug: $(BINDIR)/$(TARGET)_d
 # run
 run: release
 	@./$(BINDIR)/$(TARGET) $(ARGS)
+
+run-%: release
+	@./$(BINDIR)/$(TARGET) $*
 
 # run debug
 debug-run: debug
