@@ -50,13 +50,8 @@ inline std::function<double()> exponential(const double rate, const std::optiona
     return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
 }
 
-template <typename T = double> std::function<T()> rand() {
-    static auto generator = uniform<T>({});
-    return generator();
-}
-
-template <typename T = int> std::function<T()> rand_int() {
-    static auto generator = uniform_int<T>({});
+template <typename T = double> T rand() {
+    static auto generator = uniform<T>();
     return generator();
 }
 
@@ -509,12 +504,20 @@ template <typename Time> class IOModel {
     }
 
     void invoke_input_listeners(const std::string& from, const Dynamic& value) const {
-        invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from, value);
+        try {
+            invoke_listeners<const std::string&, const Dynamic&>(input_listeners_, from, value);
+        } catch (std::bad_cast&) {
+            throw std::runtime_error("Invalid type cast in input listener of model " + name());
+        }
     }
 
     void invoke_output_listeners(const Dynamic& value) const {
-        invoke_listeners<const std::string&, const Time&, const Dynamic&>(output_listeners_, name(), calendar_time(),
-                                                                          value);
+        try {
+            invoke_listeners<const std::string&, const Time&, const Dynamic&>(output_listeners_, name(),
+                                                                              calendar_time(), value);
+        } catch (std::bad_cast&) {
+            throw std::runtime_error("Invalid type cast in output listener of model " + name());
+        }
     }
 
   protected: // members

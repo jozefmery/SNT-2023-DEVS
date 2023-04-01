@@ -270,7 +270,7 @@ Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_tr
 void setup_inputs_outputs(Simulator& simulator) {
     // TODO input
     simulator.add_model_output_listener([](const std::string&, const TimeT&, const Devs::Dynamic& value) {
-        const std::optional<TrafficLight::Color> color{value};
+        const auto color = value.value<TrafficLight::Output>();
 
         std::cout << "Traffic light output: ";
         if (color) {
