@@ -4,8 +4,8 @@
  *  Date:       31.03.2023
  */
 
+#include <devs/examples.hpp>
 #include <devs/lib.hpp>
-#include <examples/queue.hpp>
 #include <iostream>
 
 std::unordered_map<std::string, std::function<void()>> create_examples() { return {{"queue", Examples::queue}}; }
@@ -85,7 +85,13 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        run_examples(examples, *examples_to_run);
+        if (examples_to_run->empty()) {
+            // run queue example by default
+            run_examples(examples, {"queue"});
+        } else {
+
+            run_examples(examples, *examples_to_run);
+        }
 
     } catch (std::runtime_error& e) {
 
