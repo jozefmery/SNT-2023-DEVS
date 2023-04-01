@@ -193,6 +193,38 @@ std::unordered_map<Input, std::function<State(const State&, const TimeT&)>> mess
             {Input::MODE_BLINK, handle_mode_blink},      {Input::MODE_TOGGLE, handle_mode_toggle}};
 }
 
+Color invert_color_normal_mode(const Color color) {
+    // RED/GREEN inverter
+    if (color == Color::RED) {
+        return Color::GREEN;
+    }
+    return Color::RED;
+}
+
+Color next_color_normal_mode(const State& s) {
+    // whenever s.color is YELLOW, s.next_color is RED/GREEN (i.e.: the color currently transitioning to),
+    // thus the next next_color should again be YELLOW
+    if (s.color == Color::YELLOW) {
+        return Color::YELLOW;
+    }
+    return invert_color_normal_mode(*s.color);
+}
+
+State delta_internal_normal_mode(const State& s) {
+    return {s.mode, normal_mode_color_duration(*s.next_color), s.next_color, next_color_normal_mode(s)};
+}
+
+std::optional<Color> next_color_blink_mode(const State& s) {
+    if (s.color == Color::YELLOW) {
+        return Color::YELLOW;
+    }
+    return {};
+}
+
+State delta_internal_blink_mode(const State& s) {
+    return {s.mode, blink_mode_color_duration(*s.next_color), s.next_color, next_color_blink_mode(s)};
+}
+
 State delta_external(const State& s, const TimeT& elapsed, const Input& message) {
     static auto handlers = messages_handlers();
     const auto it = handlers.find(message);
@@ -205,11 +237,25 @@ State delta_external(const State& s, const TimeT& elapsed, const Input& message)
 }
 
 State delta_internal(const State& s) {
-    // TODO
-    return s;
+    if (!s.powered()) {
+        throw std::runtime_error("Internal delta should not happen while not powered");
+    }
+
+    if (!s.color) {
+        throw std::runtime_error("Missing color in state during internal transition");
+    }
+
+    if (!s.next_color) {
+        throw std::runtime_error("Missing next_color in state during internal transition");
+    }
+
+    if (*s.mode == Mode::NORMAL) {
+        return delta_internal_normal_mode(s);
+    }
+    return delta_internal_blink_mode(s);
 }
 
-Output out(const State& s) { return s.color; }
+Output out(const State& s) { return s.next_color; }
 
 TimeT ta(const State& s) { return s.remaining; }
 } // namespace TrafficLight
@@ -221,8 +267,19 @@ Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_tr
         TrafficLight::out, TrafficLight::ta};
 }
 
-void schedule_random_traffic_light_inputs(Simulator&) {
-    // TODO
+void setup_inputs_outputs(Simulator& simulator) {
+    // TODO input
+    simulator.add_model_output_listener([](const std::string&, const TimeT&, const Devs::Dynamic& value) {
+        const std::optional<TrafficLight::Color> color{value};
+
+        std::cout << "Traffic light output: ";
+        if (color) {
+
+            std::cout << "changed color to: " << TrafficLight::color_to_str(*color);
+            return;
+        }
+        std::cout << "turned off all lights";
+    });
 }
 
 Compound create_queue_model() {
@@ -248,7 +305,7 @@ void minimal_compound_simulation() {
 
 void traffic_light_simulation() {
     Simulator simulator{"traffic light model", _impl::create_traffic_light_model(), 0.0, 100.0};
-    _impl::schedule_random_traffic_light_inputs(simulator);
+    _impl::setup_inputs_outputs(simulator);
     simulator.run();
 }
 
