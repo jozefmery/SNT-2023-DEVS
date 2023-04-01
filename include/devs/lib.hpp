@@ -23,7 +23,6 @@
 //----------------------------------------------------------------------------------------------------------------------
 namespace Devs {
 namespace Random {
-// TODO
 using Engine = std::mt19937_64;
 
 template <typename T = double> std::function<T()> uniform(const std::optional<int> seed = {}) {
@@ -83,6 +82,13 @@ template <typename T> class Box : public IBox {
 };
 } // namespace _impl
 //----------------------------------------------------------------------------------------------------------------------
+struct Null {
+    // empty type
+
+    // << required for state printing
+    friend std::ostream& operator<<(std::ostream& os, const Null&) { return os << "{}"; }
+};
+
 class Dynamic {
   public: // ctors, dtor
           // implicit wrapping for any copyable type
@@ -698,9 +704,9 @@ template <typename Time> class CompoundImpl : public IOModel<Time> {
         for (const auto& [component, influencers] : model_influencers) {
             if (component) {
                 connect_component_influencers(*component, influencers);
-            } else {
-                connect_compound_output_influencers(influencers);
+                continue;
             }
+            connect_compound_output_influencers(influencers);
         }
     }
 
