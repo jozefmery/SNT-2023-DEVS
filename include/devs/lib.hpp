@@ -26,9 +26,15 @@ namespace Random {
 using Engine = std::mt19937_64;
 
 template <typename T = double> std::function<T()> uniform(const std::optional<int> seed = {}) {
-    ;
     Engine gen{seed ? *seed : std::random_device{}()};
     std::uniform_real_distribution<T> dist{0.0, 1.0};
+    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+}
+
+template <typename T = int>
+std::function<T()> uniform_int(const T from, const T to, const std::optional<int> seed = {}) {
+    Engine gen{seed ? *seed : std::random_device{}()};
+    std::uniform_int_distribution<T> dist{from, to};
     return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
 }
 
@@ -42,6 +48,16 @@ inline std::function<double()> exponential(const double rate, const std::optiona
     Engine gen{seed ? *seed : std::random_device{}()};
     std::exponential_distribution<> dist{rate};
     return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+}
+
+template <typename T = double> std::function<T()> rand() {
+    static auto generator = uniform<T>({});
+    return generator();
+}
+
+template <typename T = int> std::function<T()> rand_int() {
+    static auto generator = uniform_int<T>({});
+    return generator();
 }
 
 } // namespace Random
