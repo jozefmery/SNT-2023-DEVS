@@ -93,6 +93,7 @@ int main(int argc, char* argv[]) {
 
         if (examples_to_run->empty()) {
             // run queue example by default
+            std::cout << "No examples provided, running default queue...\n";
             run_examples(examples, {"queue"});
             return 0;
         }
