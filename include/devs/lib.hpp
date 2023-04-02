@@ -25,9 +25,10 @@ namespace Devs {
 namespace Random {
 using Engine = std::mt19937_64;
 
-template <typename T = double> std::function<T()> uniform(const std::optional<int> seed = {}) {
+template <typename T = double>
+std::function<T()> uniform(const T from = 0.0, const T to = 1.0, const std::optional<int> seed = {}) {
     Engine gen{seed ? *seed : std::random_device{}()};
-    std::uniform_real_distribution<T> dist{0.0, 1.0};
+    std::uniform_real_distribution<T> dist{from, to};
     return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
 }
 
@@ -460,9 +461,9 @@ template <typename Time> class IOModel {
         invoke_input_listeners(from, influencer_transform(from, value, transformer));
     }
 
-    void external_input(const Time& time, const Dynamic& value) const {
+    void external_input(const Time& time, const Dynamic& value, const std::string& description) const {
         schedule_event(
-            Event<Time>{time, [this, value]() { invoke_input_listeners(name(), value); }, name(), "external input"});
+            Event<Time>{time, [this, value]() { invoke_input_listeners(name(), value); }, name(), description});
     }
 
     void add_output_listener(const Listener<const std::string&, const Time&, const Dynamic&> listener) {
@@ -859,7 +860,10 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
     }
 
   public: // methods
-    void schedule_model_input(const Time& time, const Dynamic& value) { p_model_->external_input(time, value); }
+    void schedule_model_input(const Time& time, const Dynamic& value,
+                              const std::string& description = "external input") {
+        p_model_->external_input(time, value, description);
+    }
 
     void
     add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
