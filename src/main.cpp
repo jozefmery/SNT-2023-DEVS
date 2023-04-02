@@ -12,7 +12,7 @@ std::unordered_map<std::string, std::function<void()>> create_examples() {
 
     return {{"minimal-atomic", Examples::minimal_atomic_simulation},
             {"minimal-compound", Examples::minimal_compound_simulation},
-            {"traffic-lights", Examples::traffic_light_simulation},
+            {"traffic-light", Examples::traffic_light_simulation},
             {"queue", Examples::queue_simulation}};
 }
 
