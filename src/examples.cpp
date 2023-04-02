@@ -44,6 +44,27 @@ using Output = std::optional<Color>;
 
 enum class Mode : int { NORMAL, BLINK };
 
+std::string input_to_str(const Input input) {
+    switch (input) {
+    case Input::POWER_OFF:
+        return "Power OFF";
+    case Input::POWER_ON:
+        return "Power ON";
+    case Input::POWER_TOGGLE:
+        return "Power TOGGLE";
+    case Input::MODE_NORMAL:
+        return "Mode NORMAL";
+    case Input::MODE_BLINK:
+        return "Mode BLINK";
+    case Input::MODE_TOGGLE:
+        return "Mode TOGGLE";
+    default:
+        std::stringstream s;
+        s << "Unhandled TrafficLight::Input enum class value in input_to_str: " << static_cast<int>(input);
+        throw std::runtime_error(s.str());
+    }
+}
+
 std::string color_to_str(const Color& color) {
     switch (color) {
     case Color::GREEN:
@@ -119,7 +140,7 @@ TimeT normal_mode_color_duration(const Color& color) {
 TimeT blink_mode_color_duration(const std::optional<Color>& color) {
     if (color) {
         if (*color != Color::YELLOW) {
-            throw std::runtime_error("Unexpected color in blink_mode_color_duration");
+            throw std::runtime_error("Unexpected color in blink_mode_color_duration: " + color_to_str(*color));
         }
         return 1.0;
     }
@@ -222,7 +243,8 @@ std::optional<Color> next_color_blink_mode(const State& s) {
 }
 
 State delta_internal_blink_mode(const State& s) {
-    return {s.mode, blink_mode_color_duration(*s.next_color), s.next_color, next_color_blink_mode(s)};
+
+    return {s.mode, blink_mode_color_duration(s.next_color), s.next_color, next_color_blink_mode(s)};
 }
 
 State delta_external(const State& s, const TimeT& elapsed, const Input& message) {
@@ -240,18 +262,19 @@ State delta_internal(const State& s) {
     if (!s.powered()) {
         throw std::runtime_error("Internal delta should not happen while not powered");
     }
-
-    if (!s.color) {
-        throw std::runtime_error("Missing color in state during internal transition");
-    }
-
-    if (!s.next_color) {
-        throw std::runtime_error("Missing next_color in state during internal transition");
-    }
-
     if (*s.mode == Mode::NORMAL) {
+
+        if (!s.color) {
+            throw std::runtime_error("Missing color in state during normal internal transition");
+        }
+
+        if (!s.next_color) {
+            throw std::runtime_error("Missing next_color in state during normal internal transition");
+        }
+
         return delta_internal_normal_mode(s);
     }
+
     return delta_internal_blink_mode(s);
 }
 
@@ -267,18 +290,27 @@ Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_tr
         TrafficLight::out, TrafficLight::ta};
 }
 
-void setup_inputs_outputs(Simulator& simulator) {
-    // TODO input
+void setup_traffic_light_inputs_outputs(Simulator& simulator, const TimeT& start_time, const TimeT& end_time) {
+    const auto input_count = Devs::Random::poisson(20)();
+    const auto rand_time = Devs::Random::uniform(start_time, end_time, {});
+    const auto rand_input = Devs::Random::uniform_int(0, static_cast<int>(TrafficLight::Input::_ENUM_MEMBER_COUNT) - 1);
+
+    for (int i = 0; i < input_count; ++i) {
+        const auto input = static_cast<TrafficLight::Input>(rand_input());
+        simulator.schedule_model_input(rand_time(), input, "Model input: " + TrafficLight::input_to_str(input));
+    }
+
     simulator.add_model_output_listener([](const std::string&, const TimeT&, const Devs::Dynamic& value) {
         const auto color = value.value<TrafficLight::Output>();
 
         std::cout << "Traffic light output: ";
         if (color) {
 
-            std::cout << "changed color to: " << TrafficLight::color_to_str(*color);
+            std::cout << "changed color to: " << TrafficLight::color_to_str(*color) << "\n";
             return;
         }
-        std::cout << "turned off all lights";
+        std::cout << "turned off all lights"
+                  << "\n";
     });
 }
 
@@ -304,8 +336,10 @@ void minimal_compound_simulation() {
 }
 
 void traffic_light_simulation() {
-    Simulator simulator{"traffic light model", _impl::create_traffic_light_model(), 0.0, 100.0};
-    _impl::setup_inputs_outputs(simulator);
+    const auto start_time = 0.0;
+    const auto end_time = 100.0;
+    Simulator simulator{"traffic light model", _impl::create_traffic_light_model(), start_time, end_time};
+    _impl::setup_traffic_light_inputs_outputs(simulator, start_time, end_time);
     simulator.run();
 }
 
