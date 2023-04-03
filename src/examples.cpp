@@ -3,9 +3,11 @@
  *  Author:     Bc. Jozef Méry - xmeryj00@vutbr.cz
  *  Date:       31.03.2023
  */
-
+//----------------------------------------------------------------------------------------------------------------------
 #include <devs/examples.hpp>
 #include <devs/lib.hpp>
+#include <set>
+//----------------------------------------------------------------------------------------------------------------------
 
 namespace Examples {
 
@@ -281,16 +283,15 @@ State delta_internal(const State& s) {
 Output out(const State& s) { return s.next_color; }
 
 TimeT ta(const State& s) { return s.remaining; }
-} // namespace TrafficLight
 
-Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_traffic_light_model() {
+Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_model() {
 
     return Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State>{
         TrafficLight::initial_normal_mode_state(), TrafficLight::delta_external, TrafficLight::delta_internal,
         TrafficLight::out, TrafficLight::ta};
 }
 
-void setup_traffic_light_inputs_outputs(Simulator& simulator, const TimeT& start_time, const TimeT& end_time) {
+void setup_inputs_outputs(Simulator& simulator, const TimeT& start_time, const TimeT& end_time) {
     const auto input_count = Devs::Random::poisson(20)();
     const auto rand_time = Devs::Random::uniform(start_time, end_time, {});
     const auto rand_input = Devs::Random::uniform_int(0, static_cast<int>(TrafficLight::Input::_ENUM_MEMBER_COUNT) - 1);
@@ -313,15 +314,56 @@ void setup_traffic_light_inputs_outputs(Simulator& simulator, const TimeT& start
                   << "\n";
     });
 }
+} // namespace TrafficLight
 
-Compound create_queue_model() {
+namespace Queue {
+
+class Customer {
+
+  public: // ctors, dtor
+    explicit Customer(const bool age_verify, const bool extra_counter)
+        : payment_{true}, age_verify_{age_verify}, extra_counter_{extra_counter} {}
+
+  public: // static functions
+    static Customer create_random(const double age_verify_chance = 0.5, const double extra_counter_chance = 0.5,
+                                  std::function<double()> generator = Devs::Random::uniform()) {
+
+        return Customer{generator() < age_verify_chance, generator() < extra_counter_chance};
+    }
+
+  private: // members
+    bool payment_;
+    bool age_verify_;
+    bool extra_counter_;
+};
+
+Compound create_model() {
+
     // TODO
     return create_minimal_compound_model();
 }
 
-void schedule_random_queue_inputs(Simulator&) {
-    // TODO
+void setup_inputs_outputs(Simulator& simulator, const TimeT start_time, const TimeT end_time,
+                          const double mean_expected_arrival_rate) {
+    const auto sim_duration = end_time - start_time;
+    // randomize arrival rate using the poisson distribution
+    const auto actual_arrival_rate = Devs::Random::poisson(mean_expected_arrival_rate)(); // arrivals / per simulation
+    const auto normalized_arrival_rate =
+        static_cast<double>(actual_arrival_rate) / sim_duration; // arrivals / time unit (second in this case)
+    const auto gen_arrival_interval = Devs::Random::exponential(normalized_arrival_rate);
+
+    auto arrival_time{start_time + gen_arrival_interval()};
+
+    for (int i = 0; i < actual_arrival_rate; ++i) {
+        simulator.schedule_model_input(arrival_time, Queue::Customer::create_random(), "customer arrival");
+        arrival_time += gen_arrival_interval();
+    }
+
+    simulator.add_model_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
+        std::cout << "Customer left the system at " << time << "\n";
+    });
 }
+} // namespace Queue
 
 } // namespace _impl
 
@@ -336,17 +378,27 @@ void minimal_compound_simulation() {
 }
 
 void traffic_light_simulation() {
-    const auto start_time = 0.0;
-    const auto end_time = 100.0;
-    Simulator simulator{"traffic light model", _impl::create_traffic_light_model(), start_time, end_time};
-    _impl::setup_traffic_light_inputs_outputs(simulator, start_time, end_time);
+    constexpr auto start_time = 0.0;
+    constexpr auto end_time = 100.0;
+    Simulator simulator{"traffic light model", _impl::TrafficLight::create_model(), start_time, end_time};
+    _impl::TrafficLight::setup_inputs_outputs(simulator, start_time, end_time);
     simulator.run();
 }
 
 void queue_simulation() {
-    // TODO ?
-    Simulator simulator{"queue system", _impl::create_queue_model(), 0.0, 100.0};
-    _impl::schedule_random_queue_inputs(simulator);
+    // time units
+    constexpr auto SECOND = 1.0;
+    constexpr auto MINUTE = 60.0 * SECOND;
+    constexpr auto HOUR = 60.0 * MINUTE;
+    // simulation time window
+    constexpr auto start_time = 0.0;
+    constexpr auto end_time = HOUR;
+    // queue parameters
+    constexpr auto mean_expected_arrival_rate = 10; // per simulation
+    // TODO
+
+    Simulator simulator{"shop queue system", _impl::Queue::create_model(), start_time, end_time};
+    _impl::Queue::setup_inputs_outputs(simulator, start_time, end_time, mean_expected_arrival_rate);
     simulator.run();
 }
 } // namespace Examples
