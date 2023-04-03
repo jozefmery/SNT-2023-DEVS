@@ -6,6 +6,7 @@
 //----------------------------------------------------------------------------------------------------------------------
 #include <devs/examples.hpp>
 #include <devs/lib.hpp>
+#include <queue>
 #include <set>
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -319,7 +320,6 @@ void setup_inputs_outputs(Simulator& simulator, const TimeT& start_time, const T
 namespace Queue {
 
 class Customer {
-
   public: // ctors, dtor
     explicit Customer(const bool age_verify, const bool extra_counter)
         : payment_{true}, age_verify_{age_verify}, extra_counter_{extra_counter} {}
@@ -336,6 +336,50 @@ class Customer {
     bool age_verify_;
     bool extra_counter_;
 };
+
+namespace ExtraCounter {
+
+class State {
+  public: // ctors, dtor
+    State() : queue_{} {}
+
+  public: // methods
+    bool has_waiting_customer() const { return !queue_.empty(); }
+
+    void add_customer(const Customer customer) { queue_.push(customer); }
+
+    Customer next_customer() {
+        if (!has_waiting_customer()) {
+            throw std::runtime_error("Counter has no waiting customers");
+        }
+        Customer customer = queue_.front();
+        queue_.pop();
+        return customer;
+    }
+
+  private: // members
+    std::queue<Customer> queue_;
+};
+
+Atomic<Customer, Customer, State> create_model() {
+    // TODO
+    return Atomic<Customer, Customer, State>{State{}, [](const State& s, const TimeT&, const Customer&) { return s; },
+                                             [](const State& s) { return s; },
+                                             [](const State&) {
+                                                 return Customer{false, false};
+                                             },
+                                             [](const State&) { return Devs::Const::INF; }};
+}
+
+} // namespace ExtraCounter
+
+namespace Checkout {
+// TODO
+}
+
+namespace SelfCheckout {
+// TODO
+}
 
 Compound create_model() {
 
