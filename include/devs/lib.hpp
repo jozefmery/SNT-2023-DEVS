@@ -441,6 +441,8 @@ template <typename Time> class IOModel {
   public: // methods
     const std::string& name() const { return name_; }
 
+    virtual const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>* components() const = 0;
+    virtual std::optional<Dynamic> state() const = 0;
     virtual const std::function<std::string(const std::vector<std::string>&)> select() const = 0;
     virtual void add_state_transition_listener(
         const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) = 0;
@@ -557,11 +559,20 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
   private: // methods
+    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>* components() const override {
+        return nullptr;
+    };
+
+    std::optional<Dynamic> state() const override { return model_.s; }
+
+    const S& atomic_state() const { return model_.s; }
+
     void sim_started(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
-        listener(this->name(), this->calendar_time(), state_to_str(state()));
+        listener(this->name(), this->calendar_time(), state_to_str(atomic_state()));
     }
+
     void sim_ended(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
-        listener(this->name(), this->calendar_time(), state_to_str(state()));
+        listener(this->name(), this->calendar_time(), state_to_str(atomic_state()));
     }
 
     const std::function<std::string(const std::vector<std::string>&)> select() const override {
@@ -574,28 +585,26 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         this->state_transition_listeners_.push_back(listener);
     }
 
-    const S& state() const { return model_.s; }
-
     void transition_state(const S new_state) {
-        this->state_transitioned(state_to_str(state()), state_to_str(new_state));
+        this->state_transitioned(state_to_str(atomic_state()), state_to_str(new_state));
         model_.s = new_state;
         update_last_transition_time();
     }
 
-    Time time_advance() const { return model_.ta(state()); }
+    Time time_advance() const { return model_.ta(atomic_state()); }
 
     Time internal_transition_time() const { return this->calendar_time() + time_advance(); }
 
     Y internal_transition() {
         // get output from current state
-        const auto out = model_.out(state());
-        const auto new_state = model_.delta_internal(state());
+        const auto out = model_.out(atomic_state());
+        const auto new_state = model_.delta_internal(atomic_state());
         transition_state(new_state);
         return out;
     }
 
     void external_transition(const Time& elapsed, const X& input) {
-        const auto new_state = model_.delta_external(state(), elapsed, input);
+        const auto new_state = model_.delta_external(atomic_state(), elapsed, input);
         transition_state(new_state);
     }
 
@@ -654,6 +663,12 @@ template <typename Time> class CompoundImpl : public IOModel<Time> {
     }
 
   public: // methods
+    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>* components() const override {
+        return std::addressof(components_);
+    }
+
+    std::optional<Dynamic> state() const override { return {}; };
+
     const std::function<std::string(const std::vector<std::string>&)> select() const override { return select_; }
 
     void add_state_transition_listener(
@@ -674,8 +689,6 @@ template <typename Time> class CompoundImpl : public IOModel<Time> {
             component->sim_ended(listener);
         }
     }
-
-    const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
     IOModel<Time>* model_ref(const std::string& name) {
         auto it = components_.find(name);
@@ -887,15 +900,7 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
     }
 
   public: // methods
-    void schedule_model_input(const Time& time, const Dynamic& value,
-                              const std::string& description = "external input") {
-        p_model_->external_input(time, value, description);
-    }
-
-    void
-    add_model_output_listener(const Devs::_impl::Listener<const std::string&, const Time&, const Dynamic&> listener) {
-        p_model_->add_output_listener(listener);
-    }
+    _impl::IOModel<Time>& model() { return *p_model_; }
 
     void run() {
         Step step{};

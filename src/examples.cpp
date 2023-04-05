@@ -299,10 +299,10 @@ void setup_inputs_outputs(Simulator& simulator, const TimeT& start_time, const T
 
     for (int i = 0; i < input_count; ++i) {
         const auto input = static_cast<TrafficLight::Input>(rand_input());
-        simulator.schedule_model_input(rand_time(), input, "Model input: " + TrafficLight::input_to_str(input));
+        simulator.model().external_input(rand_time(), input, "Model input: " + TrafficLight::input_to_str(input));
     }
 
-    simulator.add_model_output_listener([](const std::string&, const TimeT&, const Devs::Dynamic& value) {
+    simulator.model().add_output_listener([](const std::string&, const TimeT&, const Devs::Dynamic& value) {
         const auto color = value.value<TrafficLight::Output>();
 
         std::cout << "Traffic light output: ";
@@ -318,6 +318,19 @@ void setup_inputs_outputs(Simulator& simulator, const TimeT& start_time, const T
 } // namespace TrafficLight
 
 namespace Queue {
+
+struct Parameters {
+    TimeT start_time;
+    TimeT end_time;
+    double customer_arrival_rate;
+    double extra_counter_service_rate;
+    int extra_counter_servers;
+    double checkout_service_rate;
+    double checkout_servers;
+    double self_checkout_service_rate;
+    double self_checkout_servers;
+    double self_checkout_error_chance;
+};
 
 class Customer {
   public: // ctors, dtor
@@ -337,11 +350,9 @@ class Customer {
     bool extra_counter_;
 };
 
-namespace ExtraCounter {
-
-class State {
+class QueueState {
   public: // ctors, dtor
-    State() : queue_{} {}
+    QueueState() : queue_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
@@ -359,6 +370,13 @@ class State {
 
   private: // members
     std::queue<Customer> queue_;
+};
+
+namespace ExtraCounter {
+
+class State : public QueueState {
+  public: // ctors, dtor
+    State() : QueueState{} {}
 };
 
 Atomic<Customer, Customer, State> create_model() {
@@ -391,19 +409,18 @@ void setup_inputs_outputs(Simulator& simulator, const TimeT start_time, const Ti
                           const double mean_expected_arrival_rate) {
     const auto sim_duration = end_time - start_time;
     // randomize arrival rate using the poisson distribution
-    const auto actual_arrival_rate = Devs::Random::poisson(mean_expected_arrival_rate)(); // arrivals / per simulation
     const auto normalized_arrival_rate =
-        static_cast<double>(actual_arrival_rate) / sim_duration; // arrivals / time unit (second in this case)
+        static_cast<double>(mean_expected_arrival_rate) / sim_duration; // arrivals / time unit (second in this case)
     const auto gen_arrival_interval = Devs::Random::exponential(normalized_arrival_rate);
 
     auto arrival_time{start_time + gen_arrival_interval()};
 
-    for (int i = 0; i < actual_arrival_rate; ++i) {
-        simulator.schedule_model_input(arrival_time, Queue::Customer::create_random(), "customer arrival");
+    while (arrival_time <= end_time) {
+        simulator.model().external_input(arrival_time, Queue::Customer::create_random(), "customer arrival");
         arrival_time += gen_arrival_interval();
     }
 
-    simulator.add_model_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
+    simulator.model().add_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
         std::cout << "Customer left the system at " << time << "\n";
     });
 }
@@ -437,12 +454,17 @@ void queue_simulation() {
     // simulation time window
     constexpr auto start_time = 0.0;
     constexpr auto end_time = HOUR;
+    constexpr auto duration_seconds = end_time - start_time;
+    constexpr auto duration_minutes = duration_seconds / MINUTE;
+    constexpr auto duration_hours = duration_minutes / MINUTE;
     // queue parameters
-    constexpr auto mean_expected_arrival_rate = 10; // per simulation
-    // TODO
+    constexpr auto customer_arrival_rate = 10 * duration_hours; // 10 customers every hour
+    // extra counter
+    constexpr auto extra_counter_service_rate = 8;
+    constexpr auto ex
 
-    Simulator simulator{"shop queue system", _impl::Queue::create_model(), start_time, end_time};
-    _impl::Queue::setup_inputs_outputs(simulator, start_time, end_time, mean_expected_arrival_rate);
+        Simulator simulator{"shop queue system", _impl::Queue::create_model(), start_time, end_time};
+    _impl::Queue::setup_inputs_outputs(simulator, start_time, end_time, total_customer_arrival_rate / duration);
     simulator.run();
 }
 } // namespace Examples
