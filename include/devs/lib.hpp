@@ -848,16 +848,14 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
     }
 
     void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
-        // TODO
-        this->s_ << prefix(time) << "Starting simulation\n";
+        this->s_ << prefix(time) << "Model " << name << ": " << state << "\n";
     }
     void on_sim_step(const Time& time, const Step& step) override {
         this->s_ << prefix(time) << "Step " << step << " ---------------------"
                  << "\n";
     }
     void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
-        // TODO
-        this->s_ << prefix(time) << "Finished simulation\n";
+        this->s_ << prefix(time) << "Model " << name << ": " << state << "\n";
     }
 
   private: // methods
