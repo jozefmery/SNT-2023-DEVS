@@ -368,6 +368,7 @@ struct CheckoutParameters {
 };
 
 struct SelfCheckoutParameters {
+    // do not inherit from CheckoutParameters so that brace initializers work by default
   public: // members
     int servers;
     double service_rate;
@@ -404,18 +405,20 @@ class Customer {
     bool product_counter_;
 };
 
-class QueueState {
+enum class ServerState { IDLE, BUSY };
+
+class Servers {
   public: // ctors, dtor
-    QueueState() : queue_{} {}
+    Servers() : servers_{}, queue_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
 
     void add_customer(const Customer customer) { queue_.push(customer); }
 
-    Customer next_customer() {
+    std::optional<Customer> next_customer() {
         if (!has_waiting_customer()) {
-            throw std::runtime_error("Counter has no waiting customers");
+            {};
         }
         Customer customer = queue_.front();
         queue_.pop();
@@ -423,17 +426,22 @@ class QueueState {
     }
 
   private: // members
+    std::vector<ServerState> servers_;
     std::queue<Customer> queue_;
 };
 
+namespace SelfService {
+class State {};
+} // namespace SelfService
+
 namespace ProductCounter {
 
-class State : public QueueState {
+class State : public Servers {
   public: // ctors, dtor
-    State() : QueueState{} {}
+    State() : Servers{} {}
 };
 
-Atomic<Customer, Customer, State> create_model() {
+Atomic<Customer, Customer, State> create_model(const Parameters&) {
     // TODO
     return Atomic<Customer, Customer, State>{State{}, [](const State& s, const TimeT&, const Customer&) { return s; },
                                              [](const State& s) { return s; },
@@ -453,10 +461,12 @@ namespace SelfCheckout {
 // TODO
 }
 
-Compound create_model(const Parameters&) {
+Compound create_model(const Parameters& parameters) {
 
     // TODO
-    return create_minimal_compound_model();
+    return {{
+        {"product counter", ProductCounter::create_model(parameters)},
+    }};
 }
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
@@ -466,7 +476,10 @@ void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
     auto arrival_time{parameters.time.start + arrival_delay()};
 
     while (arrival_time <= parameters.time.end) {
-        simulator.model().external_input(arrival_time, Queue::Customer::create_random(), "customer arrival");
+        simulator.model().external_input(arrival_time,
+                                         Queue::Customer::create_random(parameters.customer.age_verify_chance,
+                                                                        parameters.customer.product_counter_chance),
+                                         "customer arrival");
         arrival_time += arrival_delay();
     }
 
