@@ -319,35 +319,89 @@ void setup_inputs_outputs(Simulator& simulator, const TimeT& start_time, const T
 
 namespace Queue {
 
+namespace Time {
+constexpr auto SECOND = 1.0;
+constexpr auto MINUTE = 60.0 * SECOND;
+constexpr auto HOUR = 60.0 * MINUTE;
+} // namespace Time
+
+struct TimeParameters {
+    TimeT duration() const {
+        assert(end >= start);
+        return end - start;
+    }
+
+    TimeT duration_seconds() const { return duration() / Time::SECOND; }
+    TimeT duration_minutes() const { return duration_seconds() / 60.0; }
+    TimeT duration_hours() const { return duration_minutes() / 60.0; }
+
+    double normalize_rate(const double rate) const { return rate / duration(); }
+
+  public: // members
+    TimeT start;
+    TimeT end;
+};
+
+struct CustomerParameters {
+    double arrival_rate;
+    double age_verify_chance;
+    double product_counter_chance;
+};
+
+struct SelfServiceParameters {
+  public: // members
+    double service_rate;
+};
+
+struct ProductCounterParameters {
+  public: // members
+    int servers;
+    double service_rate;
+};
+
+struct CheckoutParameters {
+  public: // members
+    int servers;
+    double service_rate;
+    double error_chance;
+    double error_handle_rate;
+};
+
+struct SelfCheckoutParameters {
+  public: // members
+    int servers;
+    double service_rate;
+    double error_chance;
+    double error_handle_rate;
+    double age_verify_rate;
+};
+
 struct Parameters {
-    TimeT start_time;
-    TimeT end_time;
-    double customer_arrival_rate;
-    double extra_counter_service_rate;
-    int extra_counter_servers;
-    double checkout_service_rate;
-    double checkout_servers;
-    double self_checkout_service_rate;
-    double self_checkout_servers;
-    double self_checkout_error_chance;
+  public: // members
+    TimeParameters time;
+    CustomerParameters customer;
+    ProductCounterParameters product_counter;
+    SelfServiceParameters self_service;
+    CheckoutParameters checkout;
+    SelfCheckoutParameters self_checkout;
 };
 
 class Customer {
   public: // ctors, dtor
-    explicit Customer(const bool age_verify, const bool extra_counter)
-        : payment_{true}, age_verify_{age_verify}, extra_counter_{extra_counter} {}
+    explicit Customer(const bool age_verify, const bool product_counter)
+        : payment_{true}, age_verify_{age_verify}, product_counter_{product_counter} {}
 
   public: // static functions
-    static Customer create_random(const double age_verify_chance = 0.5, const double extra_counter_chance = 0.5,
+    static Customer create_random(const double age_verify_chance = 0.5, const double product_counter_chance = 0.5,
                                   std::function<double()> generator = Devs::Random::uniform()) {
 
-        return Customer{generator() < age_verify_chance, generator() < extra_counter_chance};
+        return Customer{generator() < age_verify_chance, generator() < product_counter_chance};
     }
 
   private: // members
     bool payment_;
     bool age_verify_;
-    bool extra_counter_;
+    bool product_counter_;
 };
 
 class QueueState {
@@ -372,7 +426,7 @@ class QueueState {
     std::queue<Customer> queue_;
 };
 
-namespace ExtraCounter {
+namespace ProductCounter {
 
 class State : public QueueState {
   public: // ctors, dtor
@@ -389,7 +443,7 @@ Atomic<Customer, Customer, State> create_model() {
                                              [](const State&) { return Devs::Const::INF; }};
 }
 
-} // namespace ExtraCounter
+} // namespace ProductCounter
 
 namespace Checkout {
 // TODO
@@ -399,25 +453,21 @@ namespace SelfCheckout {
 // TODO
 }
 
-Compound create_model() {
+Compound create_model(const Parameters&) {
 
     // TODO
     return create_minimal_compound_model();
 }
 
-void setup_inputs_outputs(Simulator& simulator, const TimeT start_time, const TimeT end_time,
-                          const double mean_expected_arrival_rate) {
-    const auto sim_duration = end_time - start_time;
-    // randomize arrival rate using the poisson distribution
-    const auto normalized_arrival_rate =
-        static_cast<double>(mean_expected_arrival_rate) / sim_duration; // arrivals / time unit (second in this case)
-    const auto gen_arrival_interval = Devs::Random::exponential(normalized_arrival_rate);
+void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 
-    auto arrival_time{start_time + gen_arrival_interval()};
+    const auto arrival_delay = Devs::Random::exponential(parameters.customer.arrival_rate);
 
-    while (arrival_time <= end_time) {
+    auto arrival_time{parameters.time.start + arrival_delay()};
+
+    while (arrival_time <= parameters.time.end) {
         simulator.model().external_input(arrival_time, Queue::Customer::create_random(), "customer arrival");
-        arrival_time += gen_arrival_interval();
+        arrival_time += arrival_delay();
     }
 
     simulator.model().add_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
@@ -439,32 +489,37 @@ void minimal_compound_simulation() {
 }
 
 void traffic_light_simulation() {
+    using namespace _impl::TrafficLight;
     constexpr auto start_time = 0.0;
     constexpr auto end_time = 100.0;
-    Simulator simulator{"traffic light model", _impl::TrafficLight::create_model(), start_time, end_time};
-    _impl::TrafficLight::setup_inputs_outputs(simulator, start_time, end_time);
+    Simulator simulator{"traffic light model", create_model(), start_time, end_time};
+    setup_inputs_outputs(simulator, start_time, end_time);
     simulator.run();
 }
 
 void queue_simulation() {
-    // time units
-    constexpr auto SECOND = 1.0;
-    constexpr auto MINUTE = 60.0 * SECOND;
-    constexpr auto HOUR = 60.0 * MINUTE;
-    // simulation time window
-    constexpr auto start_time = 0.0;
-    constexpr auto end_time = HOUR;
-    constexpr auto duration_seconds = end_time - start_time;
-    constexpr auto duration_minutes = duration_seconds / MINUTE;
-    constexpr auto duration_hours = duration_minutes / MINUTE;
+    using namespace _impl::Queue;
+    // simulation time window ;
+    const TimeParameters time_params{0.0, 10 * Time::MINUTE};
     // queue parameters
-    constexpr auto customer_arrival_rate = 10 * duration_hours; // 10 customers every hour
-    // extra counter
-    constexpr auto extra_counter_service_rate = 8;
-    constexpr auto ex
+    const auto parameters = Parameters{
+        time_params,
+        {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.5},
+        {1, time_params.normalize_rate(20 * time_params.duration_hours())},
+        {time_params.normalize_rate(100 * time_params.duration_hours())},
+        {
+            2,
+            time_params.normalize_rate(20 * time_params.duration_hours()),
+            0.05,
+            time_params.normalize_rate(10 * time_params.duration_hours()),
+        },
+        {4, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
+         time_params.normalize_rate(30 * time_params.duration_hours()),
+         time_params.normalize_rate(30 * time_params.duration_hours())},
+    };
 
-        Simulator simulator{"shop queue system", _impl::Queue::create_model(), start_time, end_time};
-    _impl::Queue::setup_inputs_outputs(simulator, start_time, end_time, total_customer_arrival_rate / duration);
+    Simulator simulator{"shop queue system", create_model(parameters), time_params.start, time_params.end};
+    setup_inputs_outputs(simulator, parameters);
     simulator.run();
 }
 } // namespace Examples
