@@ -72,9 +72,11 @@ class IBox {
     virtual ~IBox() = default;
 
   public: // static functions
-    virtual std::unique_ptr<IBox> copy() const = 0;
     template <typename T> static T& ref(IBox& box) { return (dynamic_cast<Box<T>&>(box)).ref(); }
     template <typename T> static T value(const IBox& box) { return (dynamic_cast<const Box<T>&>(box)).value(); }
+
+  public: // methods
+    virtual std::unique_ptr<IBox> copy() const = 0;
 };
 
 template <typename T> class Box : public IBox {
@@ -247,6 +249,7 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
 
   public: // methods
     const Time& time() const { return time_; }
+    const Time& end_time() const { return end_time_; }
 
     std::string to_string() const {
         // create queue copy as items are deleted when traversing
@@ -314,8 +317,8 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
   private: // static functions
-    std::ptrdiff_t select_index(const std::vector<std::string>& names,
-                                const std::function<std::string(const std::vector<std::string>&)>& select) {
+    static std::ptrdiff_t select_index(const std::vector<std::string>& names,
+                                       const std::function<std::string(const std::vector<std::string>&)>& select) {
         const auto name = select(names);
         const auto name_it = std::find(names.begin(), names.end(), name);
         if (name_it == names.end()) {
@@ -442,6 +445,9 @@ template <typename Time> class IOModel {
     virtual void add_state_transition_listener(
         const Listener<const std::string&, const Time&, const std::string&, const std::string&> listener) = 0;
 
+    virtual void sim_started(const Listener<const std::string&, const Time&, const std::string&> listener) const = 0;
+    virtual void sim_ended(const Listener<const std::string&, const Time&, const std::string&> listener) const = 0;
+
     void input_from_influencer(const std::string& from, const Time& time, const Dynamic& value,
                                const Devs::Model::Transformer& transformer) const {
         if (from == name()) {
@@ -544,13 +550,20 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
   private: // static functions
-    std::string state_to_str(const S& state) {
+    static std::string state_to_str(const S& state) {
         std::stringstream s;
         s << state;
         return s.str();
     }
 
   private: // methods
+    void sim_started(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
+        listener(this->name(), this->calendar_time(), state_to_str(state()));
+    }
+    void sim_ended(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
+        listener(this->name(), this->calendar_time(), state_to_str(state()));
+    }
+
     const std::function<std::string(const std::vector<std::string>&)> select() const override {
         // use fifo selector in an atomic simulation
         return Devs::Model::Compound<Time>::fifo_selector;
@@ -563,9 +576,9 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
 
     const S& state() const { return model_.s; }
 
-    void transition_state(const S state) {
-        this->state_transitioned(state_to_str(model_.s), state_to_str(state));
-        model_.s = state;
+    void transition_state(const S new_state) {
+        this->state_transitioned(state_to_str(state()), state_to_str(new_state));
+        model_.s = new_state;
         update_last_transition_time();
     }
 
@@ -650,9 +663,20 @@ template <typename Time> class CompoundImpl : public IOModel<Time> {
         }
     }
 
+  private: // methods
+    void sim_started(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
+        for (auto& [_, component] : components_) {
+            component->sim_started(listener);
+        }
+    }
+    void sim_ended(const Listener<const std::string&, const Time&, const std::string&> listener) const override {
+        for (auto& [_, component] : components_) {
+            component->sim_ended(listener);
+        }
+    }
+
     const std::unordered_map<std::string, std::unique_ptr<IOModel<Time>>>& components() const { return components_; }
 
-  private: // methods
     IOModel<Time>* model_ref(const std::string& name) {
         auto it = components_.find(name);
         if (it == components_.end()) {
@@ -782,16 +806,15 @@ template <typename Time, typename Step = std::uint64_t> class Base {
     }
 
   public: // methods
-    // sim
-    virtual void on_sim_start(const Time&) {}
-    virtual void on_sim_step(const Time&, const Step&) {}
-    virtual void on_sim_end(const Time&) {}
     // calendar/events
     virtual void on_time_advanced(const Time&, const Time&) {}
     virtual void on_event_scheduled(const Time&, const Devs::_impl::Event<Time>&) {}
     virtual void on_executing_event_action(const Time&, const Devs::_impl::Event<Time>&) {}
     // model
     virtual void on_model_state_transition(const std::string&, const Time&, const std::string&, const std::string&) {}
+    virtual void on_sim_start(const std::string&, const Time&, const std::string&) {}
+    virtual void on_sim_step(const Time&, const Step&) {}
+    virtual void on_sim_end(const std::string&, const Time&, const std::string&) {}
 
   protected: // members
     std::ostream& s_;
@@ -808,13 +831,6 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
     }
 
   public: // methods
-    // sim
-    void on_sim_start(const Time& time) override { this->s_ << prefix(time) << "Starting simulation\n"; }
-    void on_sim_step(const Time& time, const Step& step) override {
-        this->s_ << prefix(time) << "Step " << step << " ---------------------"
-                 << "\n";
-    }
-    void on_sim_end(const Time& time) override { this->s_ << prefix(time) << "Finished simulation\n"; }
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
         this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
@@ -829,6 +845,19 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
                                    const std::string& next) override {
         this->s_ << prefix(time) << "Model " << name << " state: " << prev << " -> " << next << "\n";
+    }
+
+    void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
+        // TODO
+        this->s_ << prefix(time) << "Starting simulation\n";
+    }
+    void on_sim_step(const Time& time, const Step& step) override {
+        this->s_ << prefix(time) << "Step " << step << " ---------------------"
+                 << "\n";
+    }
+    void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
+        // TODO
+        this->s_ << prefix(time) << "Finished simulation\n";
     }
 
   private: // methods
@@ -872,12 +901,16 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
 
     void run() {
         Step step{};
-        p_printer_->on_sim_start(p_calendar_->time());
+        p_model_->sim_started([&](const std::string& name, const Time& time, const std::string& state) {
+            p_printer_->on_sim_start(name, time, state);
+        });
         while (p_calendar_->execute_next(p_model_->select())) {
             p_printer_->on_sim_step(p_calendar_->time(), step);
             ++step;
         }
-        p_printer_->on_sim_end(p_calendar_->time());
+        p_model_->sim_ended([&](const std::string& name, const Time& time, const std::string& state) {
+            p_printer_->on_sim_end(name, time, state);
+        });
     }
 
   private: // methods
