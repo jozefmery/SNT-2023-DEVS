@@ -393,7 +393,7 @@ class Customer {
         : payment_{true}, age_verify_{age_verify}, product_counter_{product_counter} {}
 
   public: // static functions
-    static Customer create_random(const double age_verify_chance = 0.5, const double product_counter_chance = 0.5,
+    static Customer create_random(const double age_verify_chance, const double product_counter_chance,
                                   std::function<double()> generator = Devs::Random::uniform()) {
 
         return Customer{generator() < age_verify_chance, generator() < product_counter_chance};
@@ -405,16 +405,64 @@ class Customer {
     bool product_counter_;
 };
 
-enum class ServerState { IDLE, BUSY };
+enum class ServerAction { IDLE, SERVING };
 
+struct ServerState {
+  public: // members
+    ServerAction action;
+    TimeT remaining;
+    TimeT busy_time;
+};
+
+// TODO
 class Servers {
   public: // ctors, dtor
-    Servers() : servers_{}, queue_{} {}
+    Servers(const int servers, const std::function<double()> gen_service_time)
+        : gen_service_time_{gen_service_time}, servers_{servers, ServerState{ServerAction::IDLE, 0.0, 0.0}}, queue_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
 
-    void add_customer(const Customer customer) { queue_.push(customer); }
+    bool all_servers_idle() const {
+        for (const auto& server : servers_) {
+            if (server.action == ServerAction::SERVING) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::optional<std::ptrdiff_t> idle_server_idx() const {
+        for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
+            if (server->action == ServerAction::IDLE) {
+                return std::distance(servers_.begin(), server);
+            }
+        }
+        return std::nullopt;
+    }
+
+    TimeT earliest_free_server() const {
+        TimeT min{Devs::Const::INF};
+        for (const auto server : servers_) {
+            min = std::min(min, server.remaining);
+        }
+        return min;
+    }
+
+    void assign_customer_to_server(const std::ptrdiff_t server_idx) {
+        auto& server = servers_[server_idx];
+        server.action = ServerAction::SERVING;
+        server.remaining = gen_service_time_();
+    }
+
+    void add_customer(const Customer customer) {
+        if (const auto server_idx = idle_server_idx()) {
+            assign_customer_to_server(*server_idx);
+            return;
+        }
+        queue_.push(customer);
+    }
 
     std::optional<Customer> next_customer() {
         if (!has_waiting_customer()) {
@@ -425,12 +473,23 @@ class Servers {
         return customer;
     }
 
+    void advance_time(const TimeT time) {
+        for (auto server : servers_) {
+            if (server.action == ServerAction::SERVING) {
+                server.remaining -= time;
+                server.busy_time += time;
+            }
+        }
+    }
+
   private: // members
+    std::function<double()> gen_service_time_;
     std::vector<ServerState> servers_;
     std::queue<Customer> queue_;
 };
 
 namespace SelfService {
+// TODO
 class State {};
 } // namespace SelfService
 
@@ -438,12 +497,19 @@ namespace ProductCounter {
 
 class State : public Servers {
   public: // ctors, dtor
-    State() : Servers{} {}
+    State(const ProductCounterParameters& parameters)
+        : Servers{parameters.servers, Devs::Random::exponential(parameters.service_rate)} {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
 };
 
-Atomic<Customer, Customer, State> create_model(const Parameters&) {
+Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
     // TODO
-    return Atomic<Customer, Customer, State>{State{}, [](const State& s, const TimeT&, const Customer&) { return s; },
+
+    return Atomic<Customer, Customer, State>{State{parameters.product_counter},
+                                             [](const State& s, const TimeT&, const Customer&) { return s; },
                                              [](const State& s) { return s; },
                                              [](const State&) {
                                                  return Customer{false, false};
@@ -464,9 +530,7 @@ namespace SelfCheckout {
 Compound create_model(const Parameters& parameters) {
 
     // TODO
-    return {{
-        {"product counter", ProductCounter::create_model(parameters)},
-    }};
+    return {{{"product counter", ProductCounter::create_model(parameters)}}, {}};
 }
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
