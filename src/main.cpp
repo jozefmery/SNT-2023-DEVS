@@ -49,7 +49,7 @@ std::optional<std::vector<std::string>> parse_arguments(const std::vector<std::s
 }
 
 void print_help(const std::vector<std::string>& example_names) {
-    std::cout << "Demo application for a DEVS simulation library (SNT 2023)\n"
+    std::cout << "Demo application for the DEVS simulation library (SNT 2023)\n"
               << "Usage: \n"
               << "    devs [-h | --help] [<example>...]\n\n";
     std::cout << "Available examples: \n";

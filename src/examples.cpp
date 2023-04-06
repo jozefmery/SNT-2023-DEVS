@@ -323,6 +323,7 @@ namespace Time {
 constexpr auto SECOND = 1.0;
 constexpr auto MINUTE = 60.0 * SECOND;
 constexpr auto HOUR = 60.0 * MINUTE;
+constexpr auto EPS = 0.001;
 } // namespace Time
 
 struct TimeParameters {
@@ -355,13 +356,13 @@ struct SelfServiceParameters {
 
 struct ProductCounterParameters {
   public: // members
-    int servers;
+    size_t servers;
     double service_rate;
 };
 
 struct CheckoutParameters {
   public: // members
-    int servers;
+    size_t servers;
     double service_rate;
     double error_chance;
     double error_handle_rate;
@@ -370,7 +371,7 @@ struct CheckoutParameters {
 struct SelfCheckoutParameters {
     // do not inherit from CheckoutParameters so that brace initializers work by default
   public: // members
-    int servers;
+    size_t servers;
     double service_rate;
     double error_chance;
     double error_handle_rate;
@@ -405,37 +406,38 @@ class Customer {
     bool product_counter_;
 };
 
-enum class ServerAction { IDLE, SERVING };
+struct Server {
+  public: // methods
+    bool idle() const { return current_customer != std::nullopt; }
 
-struct ServerState {
+    bool busy() const { return !idle(); }
+
   public: // members
-    ServerAction action;
+    std::optional<Customer> current_customer;
     TimeT remaining;
-    TimeT busy_time;
+    TimeT total_busy_time;
 };
 
-// TODO
 class Servers {
   public: // ctors, dtor
-    Servers(const int servers, const std::function<double()> gen_service_time)
-        : gen_service_time_{gen_service_time}, servers_{servers, ServerState{ServerAction::IDLE, 0.0, 0.0}}, queue_{} {}
+    Servers(const size_t servers, const std::function<double()> gen_service_time)
+        : gen_service_time_{gen_service_time}, servers_{servers, Server{{}, 0.0, 0.0}}, queue_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
 
     bool all_servers_idle() const {
         for (const auto& server : servers_) {
-            if (server.action == ServerAction::SERVING) {
+            if (server.busy()) {
                 return false;
             }
         }
-
         return true;
     }
 
     std::optional<std::ptrdiff_t> idle_server_idx() const {
         for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
-            if (server->action == ServerAction::IDLE) {
+            if (server->idle()) {
                 return std::distance(servers_.begin(), server);
             }
         }
@@ -450,15 +452,30 @@ class Servers {
         return min;
     }
 
-    void assign_customer_to_server(const std::ptrdiff_t server_idx) {
+    std::optional<TimeT> earliest_server_finish() const {
+        if (all_servers_idle()) {
+            return {};
+        }
+
+        TimeT min{Devs::Const::INF};
+        for (const auto server : servers_) {
+            if (server.busy()) {
+
+                min = std::min(min, server.remaining);
+            }
+        }
+        return min;
+    }
+
+    void assign_customer_to_server(const Customer customer, const std::ptrdiff_t server_idx) {
         auto& server = servers_[server_idx];
-        server.action = ServerAction::SERVING;
+        server.current_customer = customer;
         server.remaining = gen_service_time_();
     }
 
     void add_customer(const Customer customer) {
         if (const auto server_idx = idle_server_idx()) {
-            assign_customer_to_server(*server_idx);
+            assign_customer_to_server(customer, *server_idx);
             return;
         }
         queue_.push(customer);
@@ -473,24 +490,51 @@ class Servers {
         return customer;
     }
 
-    void advance_time(const TimeT time) {
+    void advance_time(const TimeT delta) {
         for (auto server : servers_) {
-            if (server.action == ServerAction::SERVING) {
-                server.remaining -= time;
-                server.busy_time += time;
+            if (server.busy()) {
+                server.remaining -= delta;
+                server.total_busy_time += delta;
             }
         }
     }
 
+    std::vector<double> server_busy_percentages(const TimeT duration) const {
+        std::vector<double> percentages{};
+        for (const auto& server : servers_) {
+            percentages.push_back(server.total_busy_time / duration);
+        }
+        return percentages;
+    }
+
+    double total_busy_percentage(const TimeT duration) const {
+        const auto percentages = server_busy_percentages(duration);
+        if (percentages.size() == 0) {
+            return 0.0;
+        }
+        double sum{};
+        for (const auto percentage : percentages) {
+            sum += percentage;
+        }
+        return sum / percentages.size();
+    }
+
   private: // members
     std::function<double()> gen_service_time_;
-    std::vector<ServerState> servers_;
+    std::vector<Server> servers_;
     std::queue<Customer> queue_;
 };
 
 namespace SelfService {
 // TODO
-class State {};
+class State {
+  public: // ctors, dtor
+    State(const SelfServiceParameters& parameters) {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+};
 } // namespace SelfService
 
 namespace ProductCounter {
