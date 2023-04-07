@@ -317,8 +317,8 @@ template <typename Time> class Calendar : private CalendarBase<Time> {
     }
 
   private: // static functions
-    static std::ptrdiff_t select_index(const std::vector<std::string>& names,
-                                       const std::function<std::string(const std::vector<std::string>&)>& select) {
+    static size_t select_index(const std::vector<std::string>& names,
+                               const std::function<std::string(const std::vector<std::string>&)>& select) {
         const auto name = select(names);
         const auto name_it = std::find(names.begin(), names.end(), name);
         if (name_it == names.end()) {

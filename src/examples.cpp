@@ -436,7 +436,7 @@ class Servers {
 
     bool idle() const { return !has_waiting_customer() && all_servers_idle(); }
 
-    std::optional<std::ptrdiff_t> idle_server_idx() const {
+    std::optional<size_t> idle_server_idx() const {
         for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
             if (server->idle()) {
                 return std::distance(servers_.begin(), server);
@@ -445,8 +445,8 @@ class Servers {
         return std::nullopt;
     }
 
-    std::optional<std::ptrdiff_t> next_ready_server_idx() const {
-        std::optional<std::ptrdiff_t> min_idx{std::nullopt};
+    std::optional<size_t> next_ready_server_idx() const {
+        std::optional<size_t> min_idx{std::nullopt};
         TimeT min{Devs::Const::INF};
 
         for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
@@ -477,20 +477,26 @@ class Servers {
         return next;
     }
 
-    void assign_customer_to_server(const Customer customer, const std::ptrdiff_t server_idx) {
+    void assign_customer_to_server(const Customer customer, const size_t server_idx) {
+        if (server_idx >= servers_.size()) {
+            throw std::runtime_error("Invalid index in assign_customer_to_server");
+        }
+        auto& server = servers_[server_idx];
         const auto error_time = gen_error_().value_or(0.0);
         // customer error handling is part of the "busy" phase
         // include the error time in the overall remaining time
         const auto remaining = gen_service_time_() + error_time;
-        auto& server = servers_[server_idx];
         server.current_customer = customer;
         server.remaining = remaining;
         server.total_busy_time += remaining;
         server.total_error_time += error_time;
     }
 
-    void finish_serving_customer(const std::ptrdiff_t server_idx) {
+    void finish_serving_customer(const size_t server_idx) {
         auto& server = servers_[server_idx];
+        if (server_idx >= servers_.size()) {
+            throw std::runtime_error("Invalid index in finish_serving_customer");
+        }
         server.current_customer = std::nullopt;
         server.remaining = 0.0;
     }
@@ -653,7 +659,7 @@ void delta_internal_next_customers(State& state) {
     if (const auto customer = state.next_customer()) {
         const auto idle_idx = state.idle_server_idx();
         if (idle_idx == std::nullopt) {
-            throw std::runtime_error("Expected at least one idle server in Product counter during internal transition");
+            throw std::runtime_error("Expected at least one idle server in ProductCounter during internal transition");
         }
         state.assign_customer_to_server(*customer, *idle_idx);
     }
@@ -704,9 +710,12 @@ TimeT ta(const State& state) {
     if (state.has_passthrough_customer()) {
         return 0.0;
     }
-    // TODO
 
-    return Devs::Const::INF;
+    if (const auto remaining = state.remaining_to_next_ready()) {
+        return *remaining;
+    }
+
+    throw std::runtime_error("Expected at least one busy server in ProductCounter during time advance");
 }
 
 Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
