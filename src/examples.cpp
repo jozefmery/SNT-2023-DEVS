@@ -389,10 +389,6 @@ struct Parameters {
 };
 
 class Customer {
-  public: // ctors, dtor
-    explicit Customer(const bool age_verify, const bool product_counter)
-        : payment_{true}, age_verify_{age_verify}, product_counter_{product_counter} {}
-
   public: // static functions
     static Customer create_random(const double age_verify_chance, const double product_counter_chance,
                                   std::function<double()> generator = Devs::Random::uniform()) {
@@ -400,10 +396,10 @@ class Customer {
         return Customer{generator() < age_verify_chance, generator() < product_counter_chance};
     }
 
-  private: // members
-    bool payment_;
-    bool age_verify_;
-    bool product_counter_;
+  public: // members
+    bool age_verify;
+    bool product_counter;
+    bool payment = true;
 };
 
 struct Server {
@@ -438,6 +434,8 @@ class Servers {
         return true;
     }
 
+    bool idle() const { return !has_waiting_customer() && all_servers_idle(); }
+
     std::optional<std::ptrdiff_t> idle_server_idx() const {
         for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
             if (server->idle()) {
@@ -447,19 +445,36 @@ class Servers {
         return std::nullopt;
     }
 
-    std::optional<TimeT> earliest_server_finish() const {
-        if (all_servers_idle()) {
-            return {};
-        }
-
+    std::optional<std::ptrdiff_t> next_ready_server_idx() const {
+        std::optional<std::ptrdiff_t> min_idx{std::nullopt};
         TimeT min{Devs::Const::INF};
-        for (const auto server : servers_) {
-            if (server.busy()) {
 
-                min = std::min(min, server.remaining);
+        for (auto server = servers_.begin(); server != servers_.end(); server += 1) {
+            if (server->busy() && server->remaining < min) {
+                min = server->remaining;
+                min_idx = std::distance(servers_.begin(), server);
             }
         }
-        return min;
+        return min_idx;
+    }
+
+    const Customer* next_ready_customer_ref() const {
+        const auto idx = next_ready_server_idx();
+        if (idx == std::nullopt) {
+            return nullptr;
+        }
+
+        return std::addressof(*servers_[*idx].current_customer);
+    }
+
+    std::optional<TimeT> remaining_to_next_ready() const {
+        const auto next = next_ready_server_idx();
+        if (next) {
+
+            return servers_[*next].remaining;
+        }
+
+        return next;
     }
 
     void assign_customer_to_server(const Customer customer, const std::ptrdiff_t server_idx) {
@@ -472,6 +487,12 @@ class Servers {
         server.remaining = remaining;
         server.total_busy_time += remaining;
         server.total_error_time += error_time;
+    }
+
+    void finish_serving_customer(const std::ptrdiff_t server_idx) {
+        auto& server = servers_[server_idx];
+        server.current_customer = std::nullopt;
+        server.remaining = 0.0;
     }
 
     void add_customer(const Customer customer) {
@@ -500,64 +521,64 @@ class Servers {
         }
     }
 
-    std::vector<double> server_busy_percentages(const TimeT duration) const {
-        std::vector<double> percentages{};
+    std::vector<double> server_busy_ratios(const TimeT duration) const {
+        std::vector<double> ratios{};
         for (const auto& server : servers_) {
-            percentages.push_back(server.total_busy_time / duration);
+            ratios.push_back(server.total_busy_time / duration);
         }
-        return percentages;
+        return ratios;
     }
 
-    std::vector<double> server_error_percentages(const TimeT duration) const {
-        std::vector<double> percentages{};
+    std::vector<double> server_error_ratios(const TimeT duration) const {
+        std::vector<double> ratios{};
         for (const auto& server : servers_) {
-            percentages.push_back(server.total_error_time / duration);
+            ratios.push_back(server.total_error_time / duration);
         }
-        return percentages;
+        return ratios;
     }
 
-    std::vector<double> server_error_busy_ratios() const {
-        std::vector<double> percentages{};
+    std::vector<double> server_error_to_busy_ratios() const {
+        std::vector<double> ratios{};
         for (const auto& server : servers_) {
-            percentages.push_back(server.total_error_time / server.total_busy_time);
+            ratios.push_back(server.total_error_time / server.total_busy_time);
         }
-        return percentages;
+        return ratios;
     }
 
-    double total_busy_percentage(const TimeT duration) const {
-        const auto percentages = server_busy_percentages(duration);
-        if (percentages.size() == 0) {
+    double total_busy_ratio(const TimeT duration) const {
+        const auto ratios = server_busy_ratios(duration);
+        if (ratios.size() == 0) {
             return 0.0;
         }
         double sum{};
-        for (const auto percentage : percentages) {
-            sum += percentage;
+        for (const auto ratio : ratios) {
+            sum += ratio;
         }
-        return sum / percentages.size();
+        return sum / ratios.size();
     }
 
-    double total_error_percentage(const TimeT duration) const {
-        const auto percentages = server_error_percentages(duration);
-        if (percentages.size() == 0) {
+    double total_error_ratio(const TimeT duration) const {
+        const auto ratios = server_error_ratios(duration);
+        if (ratios.size() == 0) {
             return 0.0;
         }
         double sum{};
-        for (const auto percentage : percentages) {
-            sum += percentage;
+        for (const auto ratio : ratios) {
+            sum += ratio;
         }
-        return sum / percentages.size();
+        return sum / ratios.size();
     }
 
-    double total_error_busy_percentage() const {
-        const auto percentages = server_error_busy_ratios();
-        if (percentages.size() == 0) {
+    double total_error_busy_ratio() const {
+        const auto ratios = server_error_to_busy_ratios();
+        if (ratios.size() == 0) {
             return 0.0;
         }
         double sum{};
-        for (const auto percentage : percentages) {
-            sum += percentage;
+        for (const auto ratio : ratios) {
+            sum += ratio;
         }
-        return sum / percentages.size();
+        return sum / ratios.size();
     }
 
   private: // members
@@ -574,37 +595,117 @@ class State : public Servers {
     State(const ProductCounterParameters& parameters)
         : Servers{parameters.servers, Devs::Random::exponential(parameters.service_rate),
                   // no error in product counter
-                  []() { return std::nullopt; }} {}
+                  []() { return std::nullopt; }},
+          passthrough_{} {}
 
   public: // friends
     // TODO
     friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+
+  public: // methods
+    bool idle() const { return Servers::idle() && !has_passthrough_customer(); }
+
+    void add_passthrough_customer(const Customer customer) { passthrough_.push(customer); }
+
+    bool pop_passthrough_customer() {
+        if (!has_passthrough_customer()) {
+            return false;
+        }
+        passthrough_.pop();
+        return true;
+    }
+
+    const Customer* next_passthrough_customer_ref() const {
+        if (!has_passthrough_customer()) {
+            return nullptr;
+        }
+        return std::addressof(passthrough_.front());
+    }
+
+    bool has_passthrough_customer() const { return !passthrough_.empty(); }
+
+  private: // members
+    std::queue<Customer> passthrough_;
 };
 
 State delta_external(const State& state_prev, const TimeT& elapsed, const Customer& customer) {
-
     // create copy
     State state = state_prev;
-    state.add_customer(customer);
     state.advance_time(elapsed);
+    if (customer.product_counter) {
+        state.add_customer(customer);
+    } else {
+        state.add_passthrough_customer(customer);
+    }
 
     return state;
+}
+
+void delta_internal_finish_serving(State& state) {
+    const auto finished_idx = state.next_ready_server_idx();
+    if (finished_idx == std::nullopt) {
+        throw std::runtime_error("Expected at least one busy server in ProductCounter during internal transition");
+    }
+    state.finish_serving_customer(*finished_idx);
+}
+void delta_internal_next_customers(State& state) {
+    // no need to check more than once as only one server may finish during an internal delta
+    if (const auto customer = state.next_customer()) {
+        const auto idle_idx = state.idle_server_idx();
+        if (idle_idx == std::nullopt) {
+            throw std::runtime_error("Expected at least one idle server in Product counter during internal transition");
+        }
+        state.assign_customer_to_server(*customer, *idle_idx);
+    }
 }
 
 State delta_internal(const State& state_prev) {
-    // TODO
     State state = state_prev;
+
+    if (state.idle()) {
+        throw std::runtime_error("Internal delta in ProductCounter while idle");
+    }
+
+    if (state.pop_passthrough_customer()) {
+        return state;
+    }
+
+    delta_internal_finish_serving(state);
+    delta_internal_next_customers(state);
 
     return state;
 }
 
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
+Customer next_finished_customer(const State& state) {
+    const auto customer_ptr = state.next_ready_customer_ref();
+    if (customer_ptr == nullptr) {
+        throw std::runtime_error("Expected at least one served customer in ProductCounter during output");
+    }
+    return *customer_ptr;
 }
 
-TimeT ta(const State&) {
+Customer out(const State& state) {
+    if (state.idle()) {
+        throw std::runtime_error("Out in ProductCounter while idle");
+    }
+
+    if (const auto passthrough = state.next_passthrough_customer_ref()) {
+        return *passthrough;
+    }
+
+    return next_finished_customer(state);
+}
+
+TimeT ta(const State& state) {
+    if (state.idle()) {
+        return Devs::Const::INF;
+    }
+
+    if (state.has_passthrough_customer()) {
+        return 0.0;
+    }
     // TODO
+
     return Devs::Const::INF;
 }
 
