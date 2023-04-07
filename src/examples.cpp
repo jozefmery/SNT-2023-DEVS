@@ -416,12 +416,15 @@ struct Server {
     std::optional<Customer> current_customer;
     TimeT remaining;
     TimeT total_busy_time;
+    TimeT total_error_time;
 };
 
 class Servers {
   public: // ctors, dtor
-    Servers(const size_t servers, const std::function<double()> gen_service_time)
-        : gen_service_time_{gen_service_time}, servers_{servers, Server{{}, 0.0, 0.0}}, queue_{} {}
+    Servers(const size_t servers, const std::function<double()> gen_service_time,
+            const std::function<std::optional<TimeT>()> gen_error)
+        : gen_service_time_{gen_service_time}, gen_error_{gen_error}, servers_{servers, Server{{}, 0.0, 0.0, 0.0}},
+          queue_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
@@ -444,14 +447,6 @@ class Servers {
         return std::nullopt;
     }
 
-    TimeT earliest_free_server() const {
-        TimeT min{Devs::Const::INF};
-        for (const auto server : servers_) {
-            min = std::min(min, server.remaining);
-        }
-        return min;
-    }
-
     std::optional<TimeT> earliest_server_finish() const {
         if (all_servers_idle()) {
             return {};
@@ -468,9 +463,15 @@ class Servers {
     }
 
     void assign_customer_to_server(const Customer customer, const std::ptrdiff_t server_idx) {
+        const auto error_time = gen_error_().value_or(0.0);
+        // customer error handling is part of the "busy" phase
+        // include the error time in the overall remaining time
+        const auto remaining = gen_service_time_() + error_time;
         auto& server = servers_[server_idx];
         server.current_customer = customer;
-        server.remaining = gen_service_time_();
+        server.remaining = remaining;
+        server.total_busy_time += remaining;
+        server.total_error_time += error_time;
     }
 
     void add_customer(const Customer customer) {
@@ -492,10 +493,10 @@ class Servers {
 
     void advance_time(const TimeT delta) {
         for (auto server : servers_) {
-            if (server.busy()) {
-                server.remaining -= delta;
-                server.total_busy_time += delta;
+            if (server.idle()) {
+                continue;
             }
+            server.remaining = delta;
         }
     }
 
@@ -503,6 +504,22 @@ class Servers {
         std::vector<double> percentages{};
         for (const auto& server : servers_) {
             percentages.push_back(server.total_busy_time / duration);
+        }
+        return percentages;
+    }
+
+    std::vector<double> server_error_percentages(const TimeT duration) const {
+        std::vector<double> percentages{};
+        for (const auto& server : servers_) {
+            percentages.push_back(server.total_error_time / duration);
+        }
+        return percentages;
+    }
+
+    std::vector<double> server_error_busy_ratios() const {
+        std::vector<double> percentages{};
+        for (const auto& server : servers_) {
+            percentages.push_back(server.total_error_time / server.total_busy_time);
         }
         return percentages;
     }
@@ -519,49 +536,96 @@ class Servers {
         return sum / percentages.size();
     }
 
+    double total_error_percentage(const TimeT duration) const {
+        const auto percentages = server_error_percentages(duration);
+        if (percentages.size() == 0) {
+            return 0.0;
+        }
+        double sum{};
+        for (const auto percentage : percentages) {
+            sum += percentage;
+        }
+        return sum / percentages.size();
+    }
+
+    double total_error_busy_percentage() const {
+        const auto percentages = server_error_busy_ratios();
+        if (percentages.size() == 0) {
+            return 0.0;
+        }
+        double sum{};
+        for (const auto percentage : percentages) {
+            sum += percentage;
+        }
+        return sum / percentages.size();
+    }
+
   private: // members
     std::function<double()> gen_service_time_;
+    std::function<std::optional<TimeT>()> gen_error_;
     std::vector<Server> servers_;
     std::queue<Customer> queue_;
 };
-
-namespace SelfService {
-// TODO
-class State {
-  public: // ctors, dtor
-    State(const SelfServiceParameters& parameters) {}
-
-  public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
-};
-} // namespace SelfService
 
 namespace ProductCounter {
 
 class State : public Servers {
   public: // ctors, dtor
     State(const ProductCounterParameters& parameters)
-        : Servers{parameters.servers, Devs::Random::exponential(parameters.service_rate)} {}
+        : Servers{parameters.servers, Devs::Random::exponential(parameters.service_rate),
+                  // no error in product counter
+                  []() { return std::nullopt; }} {}
 
   public: // friends
     // TODO
     friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
 };
 
-Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    // TODO
+State delta_external(const State& state_prev, const TimeT& elapsed, const Customer& customer) {
 
-    return Atomic<Customer, Customer, State>{State{parameters.product_counter},
-                                             [](const State& s, const TimeT&, const Customer&) { return s; },
-                                             [](const State& s) { return s; },
-                                             [](const State&) {
-                                                 return Customer{false, false};
-                                             },
-                                             [](const State&) { return Devs::Const::INF; }};
+    // create copy
+    State state = state_prev;
+    state.add_customer(customer);
+    state.advance_time(elapsed);
+
+    return state;
+}
+
+State delta_internal(const State& state_prev) {
+    // TODO
+    State state = state_prev;
+
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
+    return Atomic<Customer, Customer, State>{State{parameters.product_counter}, delta_external, delta_internal, out,
+                                             ta};
 }
 
 } // namespace ProductCounter
+
+namespace SelfService {
+// TODO
+class State {
+  public: // ctors, dtor
+    State(const SelfServiceParameters&) {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+};
+} // namespace SelfService
 
 namespace Checkout {
 // TODO
