@@ -902,18 +902,28 @@ template <typename Time = double, typename Step = std::uint64_t> class Simulator
   public: // methods
     _impl::IOModel<Time>& model() { return *p_model_; }
 
-    void run() {
-        Step step{};
+    void sim_started() const {
+
         p_model_->sim_started([&](const std::string& name, const Time& time, const std::string& state) {
             p_printer_->on_sim_start(name, time, state);
         });
+    }
+
+    void sim_ended() {
+
+        p_model_->sim_ended([&](const std::string& name, const Time& time, const std::string& state) {
+            p_printer_->on_sim_end(name, time, state);
+        });
+    }
+
+    void run() {
+        Step step{};
+        sim_started();
         while (p_calendar_->execute_next(p_model_->select())) {
             p_printer_->on_sim_step(p_calendar_->time(), step);
             ++step;
         }
-        p_model_->sim_ended([&](const std::string& name, const Time& time, const std::string& state) {
-            p_printer_->on_sim_end(name, time, state);
-        });
+        sim_ended();
     }
 
   private: // methods
