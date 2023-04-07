@@ -404,7 +404,7 @@ class Customer {
 
 struct Server {
   public: // methods
-    bool idle() const { return current_customer != std::nullopt; }
+    bool idle() const { return current_customer == std::nullopt; }
 
     bool busy() const { return !idle(); }
 
@@ -527,6 +527,10 @@ class Servers {
         }
     }
 
+    const std::vector<Server>& servers() const { return servers_; }
+
+    size_t queue_size() const { return queue_.size(); }
+
     std::vector<double> server_busy_ratios(const TimeT duration) const {
         std::vector<double> ratios{};
         for (const auto& server : servers_) {
@@ -605,13 +609,25 @@ class State : public Servers {
           passthrough_{} {}
 
   public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        for (size_t i = 0; i < state.servers().size(); ++i) {
+            const auto& server = state.servers()[i];
+            if (server.busy()) {
+                os << "busy: " << server.remaining;
+            } else {
+                os << "idle";
+            }
+            os << " | ";
+        }
+        return os << "Q: " << state.queue_size() << " PQ: " << state.passthrough_queue_size();
+    }
 
   public: // methods
     bool idle() const { return Servers::idle() && !has_passthrough_customer(); }
 
     void add_passthrough_customer(const Customer customer) { passthrough_.push(customer); }
+
+    size_t passthrough_queue_size() const { return passthrough_.size(); }
 
     bool pop_passthrough_customer() {
         if (!has_passthrough_customer()) {
@@ -654,7 +670,7 @@ void delta_internal_finish_serving(State& state) {
     }
     state.finish_serving_customer(*finished_idx);
 }
-void delta_internal_next_customers(State& state) {
+void delta_internal_next_customer(State& state) {
     // no need to check more than once as only one server may finish during an internal delta
     if (const auto customer = state.next_customer()) {
         const auto idle_idx = state.idle_server_idx();
@@ -677,7 +693,7 @@ State delta_internal(const State& state_prev) {
     }
 
     delta_internal_finish_serving(state);
-    delta_internal_next_customers(state);
+    delta_internal_next_customer(state);
 
     return state;
 }
@@ -748,7 +764,8 @@ namespace SelfCheckout {
 Compound create_model(const Parameters& parameters) {
 
     // TODO
-    return {{{"product counter", ProductCounter::create_model(parameters)}}, {}};
+    return {{{"product counter", ProductCounter::create_model(parameters)}},
+            {{"product counter", {{{}, {}}}}, {{}, {{"product counter", {}}}}}};
 }
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
