@@ -511,7 +511,7 @@ class Servers {
 
     std::optional<Customer> next_customer() {
         if (!has_waiting_customer()) {
-            {};
+            return std::nullopt;
         }
         Customer customer = queue_.front();
         queue_.pop();
@@ -667,7 +667,9 @@ void delta_internal_finish_serving(State& state) {
     if (finished_idx == std::nullopt) {
         throw std::runtime_error("Expected at least one busy server in ProductCounter during internal transition");
     }
+    const auto delta = state.servers()[*finished_idx].remaining;
     state.finish_serving_customer(*finished_idx);
+    state.advance_time(delta);
 }
 void delta_internal_next_customer(State& state) {
     // no need to check more than once as only one server may finish during an internal delta
@@ -692,7 +694,7 @@ State delta_internal(const State& state_prev) {
     }
 
     delta_internal_finish_serving(state);
-    // delta_internal_next_customer(state);
+    delta_internal_next_customer(state);
 
     return state;
 }
@@ -769,25 +771,32 @@ Compound create_model(const Parameters& parameters) {
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 
-    // TODO
-    // const auto arrival_delay = Devs::Random::exponential(parameters.customer.arrival_rate);
+    const auto arrival_delay = Devs::Random::exponential(parameters.customer.arrival_rate);
 
-    // auto arrival_time{parameters.time.start + arrival_delay()};
+    auto arrival_time{parameters.time.start + arrival_delay()};
 
-    // while (arrival_time <= parameters.time.end) {
-    //     simulator.model().external_input(arrival_time,
-    //                                      Queue::Customer::create_random(parameters.customer.age_verify_chance,
-    //                                                                     parameters.customer.product_counter_chance),
-    //                                      "customer arrival");
-    //     arrival_time += arrival_delay();
-    // }
-
-    simulator.model().external_input(10.0, Queue::Customer::create_random(parameters.customer.age_verify_chance, 1.0),
-                                     "customer arrival");
+    while (arrival_time <= parameters.time.end) {
+        simulator.model().external_input(arrival_time,
+                                         Queue::Customer::create_random(parameters.customer.age_verify_chance,
+                                                                        parameters.customer.product_counter_chance),
+                                         "customer arrival");
+        arrival_time += arrival_delay();
+    }
 
     simulator.model().add_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
         std::cout << "Customer left the system at " << time << "\n";
     });
+}
+
+void print_stats(Simulator& simulator, const TimeT duration) {
+    const auto product_counter_state =
+        simulator.model().components()->at("product counter")->state()->value<ProductCounter::State>();
+    std::cout << "Queue stats: \n";
+    std::cout << "Product counter: \n";
+    std::cout << "Idle: " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
+    std::cout << "Busy: " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
+    std::cout << "Error: " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
+    std::cout << "Error/Busy: " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
 }
 } // namespace Queue
 
@@ -820,7 +829,7 @@ void queue_simulation() {
     const auto parameters = Parameters{
         time_params,
         {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.5},
-        {1, time_params.normalize_rate(20 * time_params.duration_hours())},
+        {2, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
             2,
@@ -833,8 +842,13 @@ void queue_simulation() {
          time_params.normalize_rate(30 * time_params.duration_hours())},
     };
 
-    Simulator simulator{"shop queue system", create_model(parameters), time_params.start, time_params.end};
+    Simulator simulator{
+        "shop queue system", create_model(parameters), time_params.start, time_params.end, 0.001,
+        // TODO remove ?
+        // Devs::Printer::Base<TimeT>::create()
+    };
     setup_inputs_outputs(simulator, parameters);
     simulator.run();
+    print_stats(simulator, time_params.duration());
 }
 } // namespace Examples
