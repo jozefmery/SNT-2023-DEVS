@@ -250,6 +250,8 @@ State delta_internal_blink_mode(const State& s) {
     return {s.mode, blink_mode_color_duration(s.next_color), s.next_color, next_color_blink_mode(s)};
 }
 
+TimeT ta(const State& s) { return s.remaining; }
+
 State delta_external(const State& s, const TimeT& elapsed, const Input& message) {
     static auto handlers = messages_handlers();
     const auto it = handlers.find(message);
@@ -282,8 +284,6 @@ State delta_internal(const State& s) {
 }
 
 Output out(const State& s) { return s.next_color; }
-
-TimeT ta(const State& s) { return s.remaining; }
 
 Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_model() {
 
@@ -493,10 +493,10 @@ class Servers {
     }
 
     void finish_serving_customer(const size_t server_idx) {
-        auto& server = servers_[server_idx];
         if (server_idx >= servers_.size()) {
             throw std::runtime_error("Invalid index in finish_serving_customer");
         }
+        auto& server = servers_[server_idx];
         server.current_customer = std::nullopt;
         server.remaining = 0.0;
     }
@@ -519,11 +519,10 @@ class Servers {
     }
 
     void advance_time(const TimeT delta) {
-        for (auto server : servers_) {
-            if (server.idle()) {
-                continue;
+        for (auto& server : servers_) {
+            if (server.busy()) {
+                server.remaining -= delta;
             }
-            server.remaining = delta;
         }
     }
 
@@ -693,7 +692,7 @@ State delta_internal(const State& state_prev) {
     }
 
     delta_internal_finish_serving(state);
-    delta_internal_next_customer(state);
+    // delta_internal_next_customer(state);
 
     return state;
 }
@@ -770,17 +769,21 @@ Compound create_model(const Parameters& parameters) {
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 
-    const auto arrival_delay = Devs::Random::exponential(parameters.customer.arrival_rate);
+    // TODO
+    // const auto arrival_delay = Devs::Random::exponential(parameters.customer.arrival_rate);
 
-    auto arrival_time{parameters.time.start + arrival_delay()};
+    // auto arrival_time{parameters.time.start + arrival_delay()};
 
-    while (arrival_time <= parameters.time.end) {
-        simulator.model().external_input(arrival_time,
-                                         Queue::Customer::create_random(parameters.customer.age_verify_chance,
-                                                                        parameters.customer.product_counter_chance),
-                                         "customer arrival");
-        arrival_time += arrival_delay();
-    }
+    // while (arrival_time <= parameters.time.end) {
+    //     simulator.model().external_input(arrival_time,
+    //                                      Queue::Customer::create_random(parameters.customer.age_verify_chance,
+    //                                                                     parameters.customer.product_counter_chance),
+    //                                      "customer arrival");
+    //     arrival_time += arrival_delay();
+    // }
+
+    simulator.model().external_input(10.0, Queue::Customer::create_random(parameters.customer.age_verify_chance, 1.0),
+                                     "customer arrival");
 
     simulator.model().add_output_listener([](const std::string&, const TimeT& time, const Devs::Dynamic&) {
         std::cout << "Customer left the system at " << time << "\n";
