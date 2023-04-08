@@ -420,7 +420,7 @@ class Servers {
     Servers(const size_t servers, const std::function<double()> gen_service_time,
             const std::function<std::optional<TimeT>()> gen_error)
         : gen_service_time_{gen_service_time}, gen_error_{gen_error}, servers_{servers, Server{{}, 0.0, 0.0, 0.0}},
-          queue_{} {}
+          queue_{}, queue_occupancy_sum_{} {}
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
@@ -524,6 +524,7 @@ class Servers {
                 server.remaining -= delta;
             }
         }
+        queue_occupancy_sum_ += delta * static_cast<TimeT>(queue_.size());
     }
 
     const std::vector<Server>& servers() const { return servers_; }
@@ -590,11 +591,14 @@ class Servers {
         return sum / ratios.size();
     }
 
+    double average_queue_size(const TimeT duration) const { return queue_occupancy_sum_ / duration; }
+
   private: // members
     std::function<double()> gen_service_time_;
     std::function<std::optional<TimeT>()> gen_error_;
     std::vector<Server> servers_;
     std::queue<Customer> queue_;
+    TimeT queue_occupancy_sum_;
 };
 
 namespace ProductCounter {
@@ -743,6 +747,12 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace ProductCounter
 
 namespace SelfService {
+struct CustomerState {
+  public: // members
+    Customer customer;
+    TimeT remaining;
+};
+
 // TODO
 class State {
   public: // ctors, dtor
@@ -751,7 +761,35 @@ class State {
   public: // friends
     // TODO
     friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+
+  private: // members
+    std::function<double()> gen_service_time_;
+    std::vector<CustomerState> customers_;
 };
+
+State delta_external(const State& state, const TimeT&, const Customer&) {
+    // TODO
+    return state;
+}
+
+State delta_internal(const State& state) {
+    // TODO
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
+    return Atomic<Customer, Customer, State>{State{parameters.self_service}, delta_external, delta_internal, out, ta};
+}
 } // namespace SelfService
 
 namespace Checkout {
@@ -791,13 +829,14 @@ void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 void print_stats(Simulator& simulator, const TimeT duration) {
     const auto product_counter_state =
         simulator.model().components()->at("product counter")->state()->value<ProductCounter::State>();
-    std::cout << "Queue stats: \n";
-    std::cout << "Product counter: \n";
-    std::cout << "Servers: " << product_counter_state.servers().size() << "\n";
-    std::cout << "Idle: " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
-    std::cout << "Busy: " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
-    std::cout << "Error: " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
-    std::cout << "Error/Busy: " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
+    std::cout << "Queue stats:\n";
+    std::cout << "Product counter:\n";
+    std::cout << "Servers:              " << product_counter_state.servers().size() << "\n";
+    std::cout << "Average queue size:   " << product_counter_state.average_queue_size(duration) << "\n";
+    std::cout << "Idle:                 " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
+    std::cout << "Busy:                 " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
+    std::cout << "Error:                " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
+    std::cout << "Error/Busy:           " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
     // TODO
 }
 } // namespace Queue
