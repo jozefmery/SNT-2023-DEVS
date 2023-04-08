@@ -8,6 +8,7 @@
 #include <devs/lib.hpp>
 #include <queue>
 #include <set>
+#include <variant>
 //----------------------------------------------------------------------------------------------------------------------
 
 namespace Examples {
@@ -399,7 +400,8 @@ class Customer {
   public: // members
     bool age_verify;
     bool product_counter;
-    bool payment = true;
+    bool self_service = true;
+    bool checkout = true;
 };
 
 struct Server {
@@ -417,10 +419,29 @@ struct Server {
 
 class Servers {
   public: // ctors, dtor
-    Servers(const size_t servers, const std::function<double()> gen_service_time,
+    Servers(const std::string& name, const size_t servers, const std::function<double()> gen_service_time,
             const std::function<std::optional<TimeT>()> gen_error)
-        : gen_service_time_{gen_service_time}, gen_error_{gen_error}, servers_{servers, Server{{}, 0.0, 0.0, 0.0}},
-          queue_{}, queue_occupancy_sum_{} {}
+        : name_{name}, gen_service_time_{gen_service_time}, gen_error_{gen_error},
+          servers_{servers, Server{{}, 0.0, 0.0, 0.0}}, queue_{}, queue_occupancy_sum_{} {
+        if (servers == 0) {
+            throw std::runtime_error("Number of server set to 0");
+        }
+    }
+
+  public: // friends
+    friend std::ostream& operator<<(std::ostream& os, const Servers& state) {
+        os << "| ";
+        for (size_t i = 0; i < state.servers().size(); ++i) {
+            const auto& server = state.servers()[i];
+            if (server.busy()) {
+                os << "busy: " << server.remaining;
+            } else {
+                os << "idle";
+            }
+            os << " | ";
+        }
+        return os << "Q: " << state.queue_size();
+    }
 
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
@@ -593,7 +614,10 @@ class Servers {
 
     double average_queue_size(const TimeT duration) const { return queue_occupancy_sum_ / duration; }
 
+    const std::string& name() const { return name_; }
+
   private: // members
+    std::string name_;
     std::function<double()> gen_service_time_;
     std::function<std::optional<TimeT>()> gen_error_;
     std::vector<Server> servers_;
@@ -601,57 +625,227 @@ class Servers {
     TimeT queue_occupancy_sum_;
 };
 
-namespace ProductCounter {
+namespace CustomerCoordinator {
 
-class State : public Servers {
+constexpr auto MODEL_NAME = "customer coordinator";
+
+struct TargetedCustomer {
+    Customer customer;
+    std::string target;
+};
+
+enum class Queries { CHECKOUT_QUEUE_SIZES };
+
+struct CheckoutQueueSizeResponse {
+    std::string from;
+    size_t queue_size;
+};
+
+using Message = std::variant<TargetedCustomer, Queries, CheckoutQueueSizeResponse>;
+
+class State {
   public: // ctors, dtor
-    State(const ProductCounterParameters& parameters)
-        : Servers{parameters.servers, Devs::Random::exponential(parameters.service_rate),
-                  // no error in product counter
-                  []() { return std::nullopt; }},
-          passthrough_{} {}
+    State(const std::string& name)
+        : name_{name}, customers_{}, awaiting_responses_{}, checkout_response_{}, self_checkout_response_{} {}
 
   public: // friends
     friend std::ostream& operator<<(std::ostream& os, const State& state) {
-        for (size_t i = 0; i < state.servers().size(); ++i) {
-            const auto& server = state.servers()[i];
-            if (server.busy()) {
-                os << "busy: " << server.remaining;
-            } else {
-                os << "idle";
-            }
-            os << " | ";
-        }
-        return os << "Q: " << state.queue_size() << " PQ: " << state.passthrough_queue_size();
+        return os << "customers: " << state.customer_count();
     }
 
   public: // methods
-    bool idle() const { return Servers::idle() && !has_passthrough_customer(); }
+    bool has_customers() const { return !customers_.empty(); }
 
-    void add_passthrough_customer(const Customer customer) { passthrough_.push(customer); }
-
-    size_t passthrough_queue_size() const { return passthrough_.size(); }
-
-    bool pop_passthrough_customer() {
-        if (!has_passthrough_customer()) {
-            return false;
-        }
-        passthrough_.pop();
-        return true;
-    }
-
-    const Customer* next_passthrough_customer_ref() const {
-        if (!has_passthrough_customer()) {
+    const Customer* next_customer_ref() const {
+        if (!has_customers()) {
             return nullptr;
         }
-        return std::addressof(passthrough_.front());
+
+        return std::addressof(customers_.front());
     }
 
-    bool has_passthrough_customer() const { return !passthrough_.empty(); }
+    bool next_customer_to_product_counter() const {
+        const auto next = next_customer_ref();
+        if (next == nullptr) {
+            return false;
+        }
+        // product counter is the first, no need to check other properties
+        return next->product_counter;
+    }
+
+    bool next_customer_to_self_service() const {
+        const auto next = next_customer_ref();
+        if (next == nullptr) {
+            return false;
+        }
+        // self service is second
+        return !next_customer_to_product_counter() && next->self_service;
+    }
+
+    bool next_customer_to_checkout() const {
+        const auto next = next_customer_ref();
+        if (next == nullptr) {
+            return false;
+        }
+        // checkout is last
+        return !next_customer_to_self_service() && next->checkout;
+    }
+
+    bool should_send_checkout_query() const { return next_customer_to_checkout() && !awaiting_responses_; }
+
+    bool awaiting_responses() const { return awaiting_responses_; }
+
+    void receive_response_from_checkout(const CheckoutQueueSizeResponse response) {
+        checkout_response_ = response;
+        awaiting_responses_ = !self_checkout_response_received();
+    }
+
+    void receive_response_from_self_checkout(const CheckoutQueueSizeResponse response) {
+        checkout_response_ = response;
+        awaiting_responses_ = !checkout_response_received();
+    }
+
+    void await_responses() { awaiting_responses_ = true; }
+
+    void clear_responses() {
+        checkout_response_ = std::nullopt;
+        self_checkout_response_ = std::nullopt;
+    }
+
+    const std::optional<CheckoutQueueSizeResponse>& checkout_response() const { return checkout_response_; }
+    const std::optional<CheckoutQueueSizeResponse>& self_checkout_response() const { return self_checkout_response_; }
+
+    bool checkout_response_received() const { return checkout_response() != std::nullopt; }
+
+    bool self_checkout_response_received() const { return self_checkout_response() != std::nullopt; }
+
+    bool responses_received() const { return checkout_response_received() && self_checkout_response_received(); }
+
+    void add_customer(const Customer customer) { customers_.push(customer); }
+
+    void pop_customer() { customers_.pop(); }
+
+    size_t customer_count() const { return customers_.size(); }
+
+    const std::string& name() const { return name_; }
 
   private: // members
-    std::queue<Customer> passthrough_;
+    std::string name_;
+    std::queue<Customer> customers_;
+    bool awaiting_responses_;
+    std::optional<CheckoutQueueSizeResponse> checkout_response_;
+    std::optional<CheckoutQueueSizeResponse> self_checkout_response_;
 };
+
+void delta_external_add_customer(State& state, const TargetedCustomer& tc) {
+    if (tc.target != state.name()) {
+        throw std::runtime_error("Unexpected target " + tc.target + " in external delta of CustomerCoordinator");
+    }
+    state.add_customer(tc.customer);
+}
+
+void delta_external_receive_response(State& state, const CheckoutQueueSizeResponse& response) {
+    if (!state.awaiting_responses()) {
+        throw std::runtime_error(
+            "Received CheckoutQueueSizeResponse in external delta of CustomerCoordinator when not awaiting");
+    }
+    if (response.from == Checkout::MODEL_NAME) {
+        if (state.checkout_response_received()) {
+            throw std::runtime_error(
+                "Received response from checkout multiple times in external delta of CustomerCoordinator");
+        }
+        state.receive_response_from_checkout(response);
+        return;
+    }
+    if (response.from == SelfCheckout::MODEL_NAME) {
+        if (state.self_checkout_response_received()) {
+            throw std::runtime_error(
+                "Received response from self checkout multiple times in external delta of CustomerCoordinator");
+        }
+        state.receive_response_from_self_checkout(response);
+        return;
+    }
+
+    throw std::runtime_error("Unexpected response from " + response.from + " in external delta of CustomerCoordinator");
+}
+
+State delta_external(const State& prev_state, const TimeT&, const Message& message) {
+
+    if (std::holds_alternative<Queries>(message)) {
+        throw std::runtime_error("Unexpected Query message in external delta of CustomerCoordinator");
+    }
+
+    State state = prev_state; // create copy
+    if (const TargetedCustomer* tc = std::get_if<TargetedCustomer>(std::addressof(message))) {
+        delta_external_add_customer(state, *tc);
+        return state;
+    }
+
+    if (const CheckoutQueueSizeResponse* response = std::get_if<CheckoutQueueSizeResponse>(std::addressof(message))) {
+        delta_external_receive_response(state, *response);
+        return state;
+    }
+
+    throw std::runtime_error("Unexpected variant in external delta of CustomerCoordinator");
+}
+
+State delta_internal(const State& state_prev) {
+    State state = state_prev;
+    if (!state.has_customers()) {
+        throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when there are no customers");
+    }
+
+    if (state.awaiting_response()) {
+        throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when awaiting response");
+    }
+
+    if (state.should_send_checkout_query()) {
+        state.await_response();
+        return state;
+    }
+
+    if (state.response_received()) {
+        state.clear_response();
+    }
+
+    state.pop_customer();
+    return state;
+}
+
+Message out(const State& state_prev) {
+    State state = state_prev;
+    if (!state.has_customers()) {
+        throw std::runtime_error("Unexpected output in CustomerCoordinator when there are no customers");
+    }
+
+    if (state.awaiting_response()) {
+        throw std::runtime_error("Unexpected output in CustomerCoordinator when awaiting response");
+    }
+
+    if (state.should_send_checkout_query()) {
+        return Queries::CHECKOUT_QUEUE_SIZES;
+    }
+
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State& state) {
+    if (state.has_customers()) {
+        return 0.0;
+    }
+    return Devs::Const::INF;
+}
+
+Atomic<Message, Message, State> create_model() {
+    return Atomic<Message, Message, State>{State{}, delta_external, delta_internal, out, ta};
+}
+} // namespace CustomerCoordinator
+
+namespace ProductCounter {
+
+constexpr auto MODEL_NAME = "product counter";
+using State = Servers;
 
 State delta_external(const State& state_prev, const TimeT& elapsed, const Customer& customer) {
     // create copy
@@ -659,8 +853,6 @@ State delta_external(const State& state_prev, const TimeT& elapsed, const Custom
     state.advance_time(elapsed);
     if (customer.product_counter) {
         state.add_customer(customer);
-    } else {
-        state.add_passthrough_customer(customer);
     }
 
     return state;
@@ -748,6 +940,8 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace ProductCounter
 
 namespace SelfService {
+constexpr auto MODEL_NAME = "self service";
+
 struct CustomerState {
   public: // members
     Customer customer;
@@ -793,43 +987,8 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 }
 } // namespace SelfService
 
-namespace CheckoutCoordinator {
-// TODO
-class State {
-  public: // ctors, dtor
-    State() {}
-
-  public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
-};
-
-State delta_external(const State& state, const TimeT&, const Customer&) {
-    // TODO
-    return state;
-}
-
-State delta_internal(const State& state) {
-    // TODO
-    return state;
-}
-
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
-}
-
-TimeT ta(const State&) {
-    // TODO
-    return Devs::Const::INF;
-}
-
-Atomic<Customer, Customer, State> create_model() {
-    return Atomic<Customer, Customer, State>{State{}, delta_external, delta_internal, out, ta};
-}
-} // namespace CheckoutCoordinator
-
 namespace Checkout {
+constexpr auto MODEL_NAME = "checkout";
 // TODO
 class State {
   public: // ctors, dtor
@@ -866,6 +1025,7 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace Checkout
 
 namespace SelfCheckout {
+constexpr auto MODEL_NAME = "self checkout";
 // TODO
 class State {
   public: // ctors, dtor
@@ -902,8 +1062,9 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace SelfCheckout
 
 namespace CustomerOutput {
+constexpr auto MODEL_NAME = "customer output";
 // TODO
-}
+} // namespace CustomerOutput
 
 Compound create_model(const Parameters& parameters) {
 
