@@ -793,10 +793,12 @@ void print_stats(Simulator& simulator, const TimeT duration) {
         simulator.model().components()->at("product counter")->state()->value<ProductCounter::State>();
     std::cout << "Queue stats: \n";
     std::cout << "Product counter: \n";
+    std::cout << "Servers: " << product_counter_state.servers().size() << "\n";
     std::cout << "Idle: " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
     std::cout << "Busy: " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
     std::cout << "Error: " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
     std::cout << "Error/Busy: " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
+    // TODO
 }
 } // namespace Queue
 
@@ -821,7 +823,7 @@ void traffic_light_simulation() {
     simulator.run();
 }
 
-void queue_simulation() {
+void queue_simulation_small() {
     using namespace _impl::Queue;
     // simulation time window ;
     const TimeParameters time_params{0.0, 10 * Time::MINUTE};
@@ -842,13 +844,43 @@ void queue_simulation() {
          time_params.normalize_rate(30 * time_params.duration_hours())},
     };
 
-    Simulator simulator{
-        "shop queue system", create_model(parameters), time_params.start, time_params.end, 0.001,
-        // TODO remove ?
-        // Devs::Printer::Base<TimeT>::create()
-    };
+    Simulator simulator{"shop queue system", create_model(parameters),
+                        time_params.start,   time_params.end,
+                        Time::EPS,           Devs::Printer::Base<TimeT>::create()};
     setup_inputs_outputs(simulator, parameters);
     simulator.run();
     print_stats(simulator, time_params.duration());
+}
+
+void queue_simulation_large() {
+
+    // TODO
+    // using namespace _impl::Queue;
+    // // simulation time window ;
+    // const TimeParameters time_params{0.0, 10 * Time::MINUTE};
+    // // queue parameters
+    // const auto parameters = Parameters{
+    //     time_params,
+    //     {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.5},
+    //     {2, time_params.normalize_rate(50 * time_params.duration_hours())},
+    //     {time_params.normalize_rate(100 * time_params.duration_hours())},
+    //     {
+    //         2,
+    //         time_params.normalize_rate(20 * time_params.duration_hours()),
+    //         0.05,
+    //         time_params.normalize_rate(10 * time_params.duration_hours()),
+    //     },
+    //     {4, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
+    //      time_params.normalize_rate(30 * time_params.duration_hours()),
+    //      time_params.normalize_rate(30 * time_params.duration_hours())},
+    // };
+
+    // Simulator simulator{
+    //     "shop queue system", create_model(parameters), time_params.start, time_params.end, Time::EPS,
+    //     Devs::Printer::Base<TimeT>::create()
+    // };
+    // setup_inputs_outputs(simulator, parameters);
+    // simulator.run();
+    // print_stats(simulator, time_params.duration());
 }
 } // namespace Examples

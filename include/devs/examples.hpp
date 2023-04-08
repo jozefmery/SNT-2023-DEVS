@@ -9,5 +9,6 @@ namespace Examples {
 void minimal_atomic_simulation();
 void minimal_compound_simulation();
 void traffic_light_simulation();
-void queue_simulation();
+void queue_simulation_small();
+void queue_simulation_large();
 } // namespace Examples

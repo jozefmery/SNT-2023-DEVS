@@ -13,7 +13,8 @@ std::unordered_map<std::string, std::function<void()>> create_examples() {
     return {{"minimal-atomic", Examples::minimal_atomic_simulation},
             {"minimal-compound", Examples::minimal_compound_simulation},
             {"traffic-light", Examples::traffic_light_simulation},
-            {"queue", Examples::queue_simulation}};
+            {"queue-small", Examples::queue_simulation_small},
+            {"queue-large", Examples::queue_simulation_large}};
 }
 
 std::vector<std::string> get_args(int argc, char* argv[]) {
