@@ -586,8 +586,6 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
     }
 
     void transition_state(const S new_state) {
-        // TODO remove
-        std::cerr << "in state transition\n";
         this->state_transitioned(state_to_str(atomic_state()), state_to_str(new_state));
         model_.s = new_state;
         update_last_transition_time();
@@ -601,11 +599,6 @@ template <typename X, typename Y, typename S, typename Time> class AtomicImpl : 
         // get output from current state
         const auto out = model_.out(atomic_state());
         const auto new_state = model_.delta_internal(atomic_state());
-        // TODO remove
-        std::cerr << "before state transition\n";
-        std::cerr << state_to_str(atomic_state()) << "\n";
-        const auto _ = new_state;
-        std::cerr << "copied\n";
         transition_state(new_state);
         return out;
     }
