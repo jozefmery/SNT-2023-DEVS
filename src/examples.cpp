@@ -883,13 +883,21 @@ namespace ProductCounter {
 constexpr auto MODEL_NAME = "product counter";
 using State = Servers;
 
-State delta_external(const State& state_prev, const TimeT& elapsed, const Customer& customer) {
+State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
     // create copy
     State state = state_prev;
+    // advance time before potentially adding a new customer
     state.advance_time(elapsed);
-    if (customer.product_counter) {
+    const CustomerCoordinator::TargetedCustomer* tc =
+        std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
+    if (tc != nullptr && tc->target == state.name()) {
+        const auto customer = tc->customer;
+        if (!customer.product_counter) {
+            throw std::runtime_error("Unexpected customer in product counter");
+        }
         state.add_customer(customer);
     }
+    // ignore other messages
 
     return state;
 }
@@ -922,31 +930,25 @@ State delta_internal(const State& state_prev) {
         throw std::runtime_error("Internal delta in ProductCounter while idle");
     }
 
-    if (state.pop_passthrough_customer()) {
-        return state;
-    }
-
     delta_internal_finish_serving(state);
     delta_internal_next_customer(state);
 
     return state;
 }
 
-Customer next_finished_customer(const State& state) {
+CustomerCoordinator::Message next_finished_customer(const State& state) {
     const auto customer_ptr = state.next_ready_customer_ref();
     if (customer_ptr == nullptr) {
         throw std::runtime_error("Expected at least one served customer in ProductCounter during output");
     }
-    return *customer_ptr;
+    auto customer = *customer_ptr;
+    customer.product_counter = false; // product counter served
+    return CustomerCoordinator::TargetedCustomer{*customer_ptr, CustomerCoordinator::MODEL_NAME};
 }
 
-Customer out(const State& state) {
+CustomerCoordinator::Message out(const State& state) {
     if (state.idle()) {
         throw std::runtime_error("Out in ProductCounter while idle");
-    }
-
-    if (const auto passthrough = state.next_passthrough_customer_ref()) {
-        return *passthrough;
     }
 
     return next_finished_customer(state);
@@ -957,10 +959,6 @@ TimeT ta(const State& state) {
         return Devs::Const::INF;
     }
 
-    if (state.has_passthrough_customer()) {
-        return 0.0;
-    }
-
     if (const auto remaining = state.remaining_to_next_ready()) {
         return *remaining;
     }
@@ -968,9 +966,13 @@ TimeT ta(const State& state) {
     throw std::runtime_error("Expected at least one busy server in ProductCounter during time advance");
 }
 
-Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    return Atomic<Customer, Customer, State>{State{parameters.product_counter}, delta_external, delta_internal, out,
-                                             ta};
+Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>
+create_model(const ProductCounterParameters& parameters) {
+    return Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>{
+        State{MODEL_NAME, parameters.servers, Devs::Random::exponential(parameters.service_rate),
+              // no error in product counter
+              []() { return std::nullopt; }},
+        delta_external, delta_internal, out, ta};
 }
 
 } // namespace ProductCounter
@@ -1102,12 +1104,16 @@ constexpr auto MODEL_NAME = "customer output";
 // TODO
 } // namespace CustomerOutput
 
-Compound create_model(const Parameters& parameters) {
-
-    // TODO
-    return {{{"product counter", ProductCounter::create_model(parameters)}},
-            {{"product counter", {{{}, {}}}}, {{}, {{"product counter", {}}}}}};
+std::unordered_map<std::string, Devs::Model::AbstractModelFactory<TimeT>> components(const Parameters& parameters) {
+    return {{ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)}};
 }
+
+std::unordered_map<std::optional<std::string>, Devs::Model::Influencers> influencers() {
+    // TODO
+    return {};
+}
+
+Compound create_model(const Parameters& parameters) { return {components(parameters), influencers()}; }
 
 void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 
