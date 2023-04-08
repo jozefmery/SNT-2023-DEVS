@@ -626,7 +626,6 @@ class Servers {
 };
 
 namespace CustomerCoordinator {
-
 constexpr auto MODEL_NAME = "customer coordinator";
 
 struct TargetedCustomer {
@@ -646,7 +645,7 @@ using Message = std::variant<TargetedCustomer, Queries, CheckoutQueueSizeRespons
 class State {
   public: // ctors, dtor
     State(const std::string& name)
-        : name_{name}, customers_{}, awaiting_responses_{}, checkout_response_{}, self_checkout_response_{} {}
+        : name_{name}, customers_{}, awaiting_responses_{false}, checkout_response_{}, self_checkout_response_{} {}
 
   public: // friends
     friend std::ostream& operator<<(std::ostream& os, const State& state) {
@@ -690,6 +689,8 @@ class State {
         // checkout is last
         return !next_customer_to_self_service() && next->checkout;
     }
+
+    bool next_customer_should_exit() const { return !next_customer_to_checkout(); }
 
     bool should_send_checkout_query() const { return next_customer_to_checkout() && !awaiting_responses_; }
 
@@ -795,21 +796,48 @@ State delta_internal(const State& state_prev) {
         throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when there are no customers");
     }
 
-    if (state.awaiting_response()) {
-        throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when awaiting response");
+    if (state.awaiting_responses()) {
+        throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when awaiting responses");
     }
 
     if (state.should_send_checkout_query()) {
-        state.await_response();
+        state.await_responses();
         return state;
     }
 
-    if (state.response_received()) {
-        state.clear_response();
+    if (state.responses_received()) {
+        state.clear_responses();
     }
 
     state.pop_customer();
     return state;
+}
+
+Message out_responses_received(const State& state) {
+    if (!state.next_customer_to_checkout()) {
+        throw std::runtime_error("Unexpected customer in out_responses_received of CustomerCoordinator");
+    }
+    // prefer checkout over self-checkout when even
+    if (state.checkout_response()->queue_size <= state.self_checkout_response()->queue_size) {
+        return TargetedCustomer{*state.next_customer_ref(), Checkout::MODEL_NAME};
+    }
+    return TargetedCustomer{*state.next_customer_ref(), SelfCheckout::MODEL_NAME};
+}
+
+Message out_target_customer(const State& state) {
+    if (state.next_customer_to_checkout()) {
+        throw std::runtime_error("Unexpected checkout customer in out_target_customer of CustomerCoordinator");
+    }
+    if (state.next_customer_to_product_counter()) {
+        return TargetedCustomer{*state.next_customer_ref(), ProductCounter::MODEL_NAME};
+    }
+    if (state.next_customer_to_self_service()) {
+        return TargetedCustomer{*state.next_customer_ref(), SelfService::MODEL_NAME};
+    }
+    if (state.next_customer_should_exit()) {
+        return TargetedCustomer{*state.next_customer_ref(), CustomerOutput::MODEL_NAME};
+    }
+    throw std::runtime_error("Unexpected customer in out_target_customer of CustomerCoordinator");
 }
 
 Message out(const State& state_prev) {
@@ -818,19 +846,27 @@ Message out(const State& state_prev) {
         throw std::runtime_error("Unexpected output in CustomerCoordinator when there are no customers");
     }
 
-    if (state.awaiting_response()) {
-        throw std::runtime_error("Unexpected output in CustomerCoordinator when awaiting response");
+    if (state.awaiting_responses()) {
+        throw std::runtime_error("Unexpected output in CustomerCoordinator when awaiting responses");
     }
 
     if (state.should_send_checkout_query()) {
         return Queries::CHECKOUT_QUEUE_SIZES;
     }
 
-    // TODO
-    return Customer{false, false};
+    if (state.responses_received()) {
+        return out_responses_received(state);
+    }
+
+    return out_target_customer(state);
 }
 
 TimeT ta(const State& state) {
+    if (state.awaiting_responses()) {
+
+        return Devs::Const::INF;
+    }
+
     if (state.has_customers()) {
         return 0.0;
     }
@@ -838,7 +874,7 @@ TimeT ta(const State& state) {
 }
 
 Atomic<Message, Message, State> create_model() {
-    return Atomic<Message, Message, State>{State{}, delta_external, delta_internal, out, ta};
+    return Atomic<Message, Message, State>{State{MODEL_NAME}, delta_external, delta_internal, out, ta};
 }
 } // namespace CustomerCoordinator
 
