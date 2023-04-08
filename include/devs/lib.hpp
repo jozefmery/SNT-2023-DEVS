@@ -806,6 +806,8 @@ constexpr double INF = std::numeric_limits<double>::infinity();
 //----------------------------------------------------------------------------------------------------------------------
 namespace Printer {
 
+// this enum is a limited selection, full list here:
+// https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
 enum class TextDecoration : int {
     NONE = 0,
     FONT_BOLD = 1,
@@ -915,35 +917,59 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
   public: // methods
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
-        this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
+        this->s_ << prefix(prev) << text_style("Time: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(format_time(prev),
+                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE})
+                 << text_style(" -> ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(format_time(next), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
     void on_event_scheduled(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time) << "Event scheduled: " << event.to_string() << "\n";
+        this->s_ << prefix(time)
+                 << text_style("Event scheduled: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(event.to_string(), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN}) << "\n";
     }
     void on_executing_event_action(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time) << "Executing event action: " << event.to_string() << "\n";
+        this->s_ << prefix(time)
+                 << text_style("Executing event action: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(event.to_string(), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN}) << "\n";
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
                                    const std::string& next) override {
-        this->s_ << prefix(time) << "Model " << name << " state: " << prev << " -> " << next << "\n";
+        this->s_ << prefix(time)
+                 << text_style("Model " + name + " state: ",
+                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(prev, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE})
+                 << text_style(" -> ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(next, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
 
     void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time) << "Model " << name << ": " << state << "\n";
+        this->s_ << prefix(time)
+                 << text_style("Model " + name + " initial state: ",
+                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
     void on_sim_step(const Time& time, const Step& step) override {
-        this->s_ << prefix(time) << "Step " << step << " ---------------------"
+        this->s_ << prefix(time)
+                 << text_style("Step " + std::to_string(step) +
+                                   " -------------------------------------------------------------",
+                               {TextDecoration::FONT_BOLD, TextDecoration::FG_MAGENTA})
                  << "\n";
     }
     void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time) << "Model " << name << ": " << state << "\n";
+        this->s_ << prefix(time)
+                 << text_style("Model " + name + " ending state: ",
+                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
 
   private: // methods
     std::string prefix(const Time& time) {
         std::stringstream s;
-        s << "[T = " << format_time(time) << "] ";
+        s << text_style("[", {TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD})
+          << text_style("T = " + format_time(time), {TextDecoration::FG_YELLOW, TextDecoration::FONT_BOLD})
+          << text_style("]", {TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD}) << " ";
         return s.str();
     }
 

@@ -672,8 +672,9 @@ void delta_internal_finish_serving(State& state) {
         throw std::runtime_error("Expected at least one busy server in ProductCounter during internal transition");
     }
     const auto delta = state.servers()[*finished_idx].remaining;
-    state.finish_serving_customer(*finished_idx);
+    // advance time before serving for correct queue occupancy
     state.advance_time(delta);
+    state.finish_serving_customer(*finished_idx);
 }
 void delta_internal_next_customer(State& state) {
     // no need to check more than once as only one server may finish during an internal delta
@@ -792,11 +793,115 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 }
 } // namespace SelfService
 
-namespace Checkout {
+namespace CheckoutCoordinator {
 // TODO
+class State {
+  public: // ctors, dtor
+    State() {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+};
+
+State delta_external(const State& state, const TimeT&, const Customer&) {
+    // TODO
+    return state;
 }
 
+State delta_internal(const State& state) {
+    // TODO
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<Customer, Customer, State> create_model() {
+    return Atomic<Customer, Customer, State>{State{}, delta_external, delta_internal, out, ta};
+}
+} // namespace CheckoutCoordinator
+
+namespace Checkout {
+// TODO
+class State {
+  public: // ctors, dtor
+    State(const CheckoutParameters&) {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+};
+
+State delta_external(const State& state, const TimeT&, const Customer&) {
+    // TODO
+    return state;
+}
+
+State delta_internal(const State& state) {
+    // TODO
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
+    return Atomic<Customer, Customer, State>{State{parameters.checkout}, delta_external, delta_internal, out, ta};
+}
+} // namespace Checkout
+
 namespace SelfCheckout {
+// TODO
+class State {
+  public: // ctors, dtor
+    State(const SelfCheckoutParameters&) {}
+
+  public: // friends
+    // TODO
+    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+};
+
+State delta_external(const State& state, const TimeT&, const Customer&) {
+    // TODO
+    return state;
+}
+
+State delta_internal(const State& state) {
+    // TODO
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
+    return Atomic<Customer, Customer, State>{State{parameters.self_checkout}, delta_external, delta_internal, out, ta};
+}
+} // namespace SelfCheckout
+
+namespace CustomerOutput {
 // TODO
 }
 
@@ -883,9 +988,7 @@ void queue_simulation_small() {
          time_params.normalize_rate(30 * time_params.duration_hours())},
     };
 
-    Simulator simulator{"shop queue system", create_model(parameters),
-                        time_params.start,   time_params.end,
-                        Time::EPS,           Devs::Printer::Base<TimeT>::create()};
+    Simulator simulator{"shop queue system", create_model(parameters), time_params.start, time_params.end};
     setup_inputs_outputs(simulator, parameters);
     simulator.run();
     print_stats(simulator, time_params.duration());
