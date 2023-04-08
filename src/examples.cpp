@@ -627,6 +627,29 @@ class Servers {
 
 namespace CustomerCoordinator {
 constexpr auto MODEL_NAME = "customer coordinator";
+}
+
+namespace ProductCounter {
+constexpr auto MODEL_NAME = "product counter";
+}
+
+namespace SelfService {
+constexpr auto MODEL_NAME = "self service";
+}
+
+namespace Checkout {
+constexpr auto MODEL_NAME = "checkout";
+}
+
+namespace SelfCheckout {
+constexpr auto MODEL_NAME = "self checkout";
+}
+
+namespace CustomerOutput {
+constexpr auto MODEL_NAME = "customer output";
+}
+
+namespace CustomerCoordinator {
 
 struct TargetedCustomer {
     Customer customer;
@@ -644,7 +667,7 @@ using Message = std::variant<TargetedCustomer, Queries, CheckoutQueueSizeRespons
 
 class State {
   public: // ctors, dtor
-    State(const std::string& name)
+    State(const std::string name)
         : name_{name}, customers_{}, awaiting_responses_{false}, checkout_response_{}, self_checkout_response_{} {}
 
   public: // friends
@@ -879,8 +902,6 @@ Atomic<Message, Message, State> create_model() {
 } // namespace CustomerCoordinator
 
 namespace ProductCounter {
-
-constexpr auto MODEL_NAME = "product counter";
 using State = Servers;
 
 State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
@@ -943,7 +964,7 @@ CustomerCoordinator::Message next_finished_customer(const State& state) {
     }
     auto customer = *customer_ptr;
     customer.product_counter = false; // product counter served
-    return CustomerCoordinator::TargetedCustomer{*customer_ptr, CustomerCoordinator::MODEL_NAME};
+    return CustomerCoordinator::TargetedCustomer{customer, CustomerCoordinator::MODEL_NAME};
 }
 
 CustomerCoordinator::Message out(const State& state) {
@@ -978,7 +999,6 @@ create_model(const ProductCounterParameters& parameters) {
 } // namespace ProductCounter
 
 namespace SelfService {
-constexpr auto MODEL_NAME = "self service";
 
 struct CustomerState {
   public: // members
@@ -1026,7 +1046,6 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace SelfService
 
 namespace Checkout {
-constexpr auto MODEL_NAME = "checkout";
 // TODO
 class State {
   public: // ctors, dtor
@@ -1063,7 +1082,6 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace Checkout
 
 namespace SelfCheckout {
-constexpr auto MODEL_NAME = "self checkout";
 // TODO
 class State {
   public: // ctors, dtor
@@ -1100,12 +1118,66 @@ Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
 } // namespace SelfCheckout
 
 namespace CustomerOutput {
-constexpr auto MODEL_NAME = "customer output";
-// TODO
+
+class State {
+  public: // ctors, dtor
+    State(const std::string name) : name_{name}, customers_{} {}
+
+  public: // methods
+    bool has_customers() const { return !customers_.empty(); }
+
+    void add_customer(const Customer customer) { customers_.push(customer); }
+
+    void pop_customer() { customers_.pop(); }
+
+    std::optional<Customer> next_customer() {
+        if (!has_customers()) {
+            return std::nullopt;
+        }
+        return customers_.front();
+    }
+
+    const std::string& name() const { return name_; }
+
+  private: // membersS
+    std::string name_;
+    std::queue<Customer> customers_;
+};
+
+State delta_external(const State& prev_state, const TimeT&, const CustomerCoordinator::Message& message) {
+    State state = prev_state;
+    const CustomerCoordinator::TargetedCustomer* tc =
+        std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
+    if (tc != nullptr && tc->target == state.name()) {
+        state.add_customer(tc->customer);
+    }
+    return state;
+}
+
+State delta_internal(const State& state) {
+    // TODO
+    return state;
+}
+
+Customer out(const State&) {
+    // TODO
+    return Customer{false, false};
+}
+
+TimeT ta(const State&) {
+    // TODO
+    return Devs::Const::INF;
+}
+
+Atomic<CustomerCoordinator::Message, Customer, State> create_model() {
+    return Atomic<CustomerCoordinator::Message, Customer, State>{State{MODEL_NAME}, delta_external, delta_internal, out,
+                                                                 ta};
+}
 } // namespace CustomerOutput
 
 std::unordered_map<std::string, Devs::Model::AbstractModelFactory<TimeT>> components(const Parameters& parameters) {
-    return {{ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)}};
+    return {{CustomerCoordinator::MODEL_NAME, CustomerCoordinator::create_model()},
+            {ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)}};
 }
 
 std::unordered_map<std::optional<std::string>, Devs::Model::Influencers> influencers() {
