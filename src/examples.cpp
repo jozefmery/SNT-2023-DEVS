@@ -1616,7 +1616,7 @@ void queue_simulation_small() {
     const auto parameters = Parameters{
         time_params,
         {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.75},
-        {3, time_params.normalize_rate(50 * time_params.duration_hours())},
+        {2, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
             2,
