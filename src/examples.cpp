@@ -1568,7 +1568,8 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Served customers:     " << product_counter_state.served_customers() << "\n";
     std::cout << "Servers:              " << product_counter_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << product_counter_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
+    std::cout << "Idle:                 " << std::max((1 - product_counter_state.total_busy_ratio(duration)), 0.0) * 100
+              << "\n";
     std::cout << "Busy:                 " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
     std::cout << "Error:                " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
     std::cout << "Error/Busy:           " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
@@ -1577,7 +1578,8 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Served customers:     " << checkout_state.served_customers() << "\n";
     std::cout << "Servers:              " << checkout_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << checkout_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << (1 - checkout_state.total_busy_ratio(duration)) * 100 << "\n";
+    std::cout << "Idle:                 " << std::max((1 - checkout_state.total_busy_ratio(duration)), 0.0) * 100
+              << "\n";
     std::cout << "Busy:                 " << checkout_state.total_busy_ratio(duration) * 100 << "\n";
     std::cout << "Error:                " << checkout_state.total_error_ratio(duration) * 100 << "\n";
     std::cout << "Error/Busy:           " << checkout_state.total_error_busy_ratio() * 100 << "\n";
@@ -1586,7 +1588,8 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Served customers:     " << self_checkout_state.served_customers() << "\n";
     std::cout << "Servers:              " << self_checkout_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << self_checkout_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << (1 - self_checkout_state.total_busy_ratio(duration)) * 100 << "\n";
+    std::cout << "Idle:                 " << std::max((1 - self_checkout_state.total_busy_ratio(duration)), 0.0) * 100
+              << "\n";
     std::cout << "Busy:                 " << self_checkout_state.total_busy_ratio(duration) * 100 << "\n";
     std::cout << "Error:                " << self_checkout_state.total_error_ratio(duration) * 100 << "\n";
     std::cout << "Error/Busy:           " << self_checkout_state.total_error_busy_ratio() * 100 << "\n";
@@ -1633,7 +1636,7 @@ void queue_simulation_short() {
         },
         {6, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
          time_params.normalize_rate(30 * time_params.duration_hours()),
-         time_params.normalize_rate(30 * time_params.duration_hours())},
+         time_params.normalize_rate(45 * time_params.duration_hours())},
     };
 
     Simulator simulator{"shop queue system", create_model(parameters), time_params.start, time_params.end};
@@ -1646,7 +1649,7 @@ void queue_simulation_long() {
 
     using namespace _impl::Queue;
     // simulation time window ;
-    const TimeParameters time_params{0.0, 12 * Time::HOUR};
+    const TimeParameters time_params{0.0, 10 * 24 * Time::HOUR};
     // queue parameters
     const auto parameters = Parameters{
         time_params,
@@ -1661,7 +1664,37 @@ void queue_simulation_long() {
         },
         {6, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
          time_params.normalize_rate(30 * time_params.duration_hours()),
-         time_params.normalize_rate(30 * time_params.duration_hours())},
+         time_params.normalize_rate(45 * time_params.duration_hours())},
+    };
+
+    Simulator simulator{"shop queue system", create_model(parameters),
+                        time_params.start,   time_params.end,
+                        Time::EPS,           Devs::Printer::Base<TimeT>::create()};
+    setup_inputs_outputs(simulator, parameters, false);
+    simulator.run();
+    print_stats(simulator, time_params.duration());
+}
+
+void queue_simulation_large() {
+
+    using namespace _impl::Queue;
+    // simulation time window ;
+    const TimeParameters time_params{0.0, 24 * Time::HOUR};
+    // queue parameters
+    const auto parameters = Parameters{
+        time_params,
+        {time_params.normalize_rate(1000 * time_params.duration_hours()), 0.5, 0.75},
+        {20, time_params.normalize_rate(50 * time_params.duration_hours())},
+        {time_params.normalize_rate(1000 * time_params.duration_hours())},
+        {
+            30,
+            time_params.normalize_rate(20 * time_params.duration_hours()),
+            0.05,
+            time_params.normalize_rate(10 * time_params.duration_hours()),
+        },
+        {60, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
+         time_params.normalize_rate(30 * time_params.duration_hours()),
+         time_params.normalize_rate(45 * time_params.duration_hours())},
     };
 
     Simulator simulator{"shop queue system", create_model(parameters),

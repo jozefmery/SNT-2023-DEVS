@@ -14,7 +14,8 @@ std::unordered_map<std::string, std::function<void()>> create_examples() {
             {"minimal-compound", Examples::minimal_compound_simulation},
             {"traffic-light", Examples::traffic_light_simulation},
             {"queue-short", Examples::queue_simulation_short},
-            {"queue-long", Examples::queue_simulation_long}};
+            {"queue-long", Examples::queue_simulation_long},
+            {"queue-large", Examples::queue_simulation_large}};
 }
 
 std::vector<std::string> get_args(int argc, char* argv[]) {

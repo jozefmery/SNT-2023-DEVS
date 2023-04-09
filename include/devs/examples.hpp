@@ -11,4 +11,5 @@ void minimal_compound_simulation();
 void traffic_light_simulation();
 void queue_simulation_short();
 void queue_simulation_long();
+void queue_simulation_large();
 } // namespace Examples
