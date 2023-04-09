@@ -850,30 +850,21 @@ enum class TextDecoration : int {
     BG_BRIGHT_WHITE = 107
 };
 
-namespace _impl {
+constexpr auto START_STYLE = "\033[";
+constexpr auto END_STYLE = "\033[m";
 
-inline std::string decoration_to_sequence(const TextDecoration decoration) {
-    return std::to_string(static_cast<int>(decoration));
-}
+using Decorations = std::vector<TextDecoration>;
 
-constexpr auto ANSI_CONTROL_SEQUENCE = "\033[";
-constexpr auto ANSI_RESET_SEQUENCE = "\033[m";
-
-} // namespace _impl
-
-inline std::string text_style(const std::string& text, const std::vector<TextDecoration>& decorations = {}) {
-    using namespace _impl;
-    std::stringstream s;
-    s << ANSI_CONTROL_SEQUENCE;
+inline std::ostream& operator<<(std::ostream& os, const std::vector<TextDecoration>& decorations) {
+    os << START_STYLE;
     for (size_t i = 0; i < decorations.size(); ++i) {
 
-        s << decoration_to_sequence(decorations[i]);
+        os << std::to_string(static_cast<int>(decorations[i]));
         if (i < decorations.size() - 1) {
-            s << ";";
+            os << ";";
         }
     }
-    s << "m" << text << ANSI_RESET_SEQUENCE;
-    return s.str();
+    return os << "m";
 }
 
 template <typename Time, typename Step = std::uint64_t> class Base {
@@ -904,74 +895,50 @@ template <typename Time, typename Step = std::uint64_t> class Base {
     std::ostream& s_;
 };
 
-template <typename Time, typename Step = std::uint64_t> class Verbose : public Base<Time, Step> {
+template <typename Time, typename Step = std::uint64_t> class PlainVerbose : public Base<Time, Step> {
 
   public: // ctors, dtor
-    explicit Verbose(std::ostream& stream = std::cout) : Base<Time, Step>{stream} {}
+    explicit PlainVerbose(std::ostream& stream = std::cout) : Base<Time, Step>{stream} {}
 
   public: // static functions
-    static std::unique_ptr<Verbose<Time, Step>> create(std::ostream& stream = std::cout) {
-        return std::make_unique<Verbose<Time, Step>>(stream);
+    static std::unique_ptr<PlainVerbose<Time, Step>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<PlainVerbose<Time, Step>>(stream);
     }
 
   public: // methods
     // calendar/event
     void on_time_advanced(const Time& prev, const Time& next) override {
-        this->s_ << prefix(prev) << text_style("Time: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(format_time(prev),
-                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE})
-                 << text_style(" -> ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(format_time(next), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
+        this->s_ << prefix(prev) << "Time: " << format_time(prev) << " -> " << format_time(next) << "\n";
     }
     void on_event_scheduled(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time)
-                 << text_style("Event scheduled: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(event.to_string(), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN}) << "\n";
+        this->s_ << prefix(time) << "Event scheduled: " << event.to_string() << "\n";
     }
     void on_executing_event_action(const Time& time, const Devs::_impl::Event<Time>& event) override {
-        this->s_ << prefix(time)
-                 << text_style("Executing event action: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(event.to_string(), {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN}) << "\n";
+        this->s_ << prefix(time) << "Executing event action: " << event.to_string() << "\n";
     }
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
                                    const std::string& next) override {
-        this->s_ << prefix(time) << prefix(time)
-                 << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
-                 << text_style(" state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-
-                 << text_style(prev, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE})
-                 << text_style(" -> ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(next, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
+        this->s_ << prefix(time) << "Model " << name << " state: " << prev << " -> " << next << "\n";
     }
 
     void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time) << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
-                 << text_style(" initial state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
+        this->s_ << prefix(time) << "Model " << name << " initial state: " << state << "\n";
     }
     void on_sim_step(const Time& time, const Step& step) override {
-        this->s_ << prefix(time)
-                 << text_style("Step " + std::to_string(step) +
-                                   " -------------------------------------------------------------",
-                               {TextDecoration::FONT_BOLD, TextDecoration::FG_MAGENTA})
+        this->s_ << prefix(time) << "Step " << std::to_string(step)
+                 << " -------------------------------------------------------------"
+
                  << "\n";
     }
     void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time) << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
-                 << text_style(" ending state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
-                 << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
+        this->s_ << prefix(time) << "Model " << name << " ending state: " << state << "\n";
     }
 
-  private: // methods
+  protected: // methods
     std::string prefix(const Time& time) {
         std::stringstream s;
-        s << text_style("[", {TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD})
-          << text_style("T = " + format_time(time), {TextDecoration::FG_YELLOW, TextDecoration::FONT_BOLD})
-          << text_style("]", {TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD}) << " ";
+        s << "[T = " << format_time(time) << "] ";
         return s.str();
     }
 
@@ -982,13 +949,112 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
         return s.str();
     }
 };
+
+template <typename Time, typename Step = std::uint64_t> class ColoredVerbose : public PlainVerbose<Time, Step> {
+
+  public: // ctors, dtor
+    explicit ColoredVerbose(std::ostream& stream = std::cout) : PlainVerbose<Time, Step>{stream} {}
+
+  public: // static functions
+    static std::unique_ptr<ColoredVerbose<Time, Step>> create(std::ostream& stream = std::cout) {
+        return std::make_unique<ColoredVerbose<Time, Step>>(stream);
+    }
+
+  public: // methods
+    // calendar/event
+    void on_time_advanced(const Time& prev, const Time& next) override {
+        this->s_ << prefix(prev);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Time: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE};
+        this->s_ << this->format_time(prev) << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << " -> " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << this->format_time(next) << END_STYLE << "\n";
+    }
+    void on_event_scheduled(const Time& time, const Devs::_impl::Event<Time>& event) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Event scheduled: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN};
+        this->s_ << event.to_string() << END_STYLE << "\n";
+    }
+    void on_executing_event_action(const Time& time, const Devs::_impl::Event<Time>& event) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Executing event action: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_CYAN};
+        this->s_ << event.to_string() << END_STYLE << "\n";
+    }
+    // model
+    void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
+                                   const std::string& next) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Model " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << name << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << " state: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE};
+        this->s_ << prev << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << " -> " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << next << END_STYLE << "\n";
+    }
+
+    void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Model " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << name << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << " initial state: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << state << END_STYLE << "\n";
+    }
+
+    void on_sim_step(const Time& time, const Step& step) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_MAGENTA};
+        this->s_ << "Step " << step << " -------------------------------------------------------------\n" << END_STYLE;
+    }
+
+    void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
+        this->s_ << prefix(time);
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << "Model " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << name << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE};
+        this->s_ << " ending state: " << END_STYLE;
+        this->s_ << Decorations{TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN};
+        this->s_ << state << END_STYLE << "\n";
+    }
+
+  protected: // methods
+    std::string prefix(const Time& time) {
+        std::stringstream s;
+        s << Decorations{TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD};
+        s << "[" << END_STYLE;
+        s << Decorations{TextDecoration::FG_YELLOW, TextDecoration::FONT_BOLD};
+        s << "T = " << this->format_time(time) << END_STYLE;
+        s << Decorations{TextDecoration::FG_WHITE, TextDecoration::FONT_BOLD};
+        s << "] " << END_STYLE;
+        return s.str();
+    }
+};
 } // namespace Printer
 //----------------------------------------------------------------------------------------------------------------------
 template <typename Time = double, typename Step = std::uint64_t> class Simulator {
   public: // ctors, dtor
-    explicit Simulator(const std::string model_name, const Devs::Model::AbstractModelFactory<Time> model,
-                       const Time start_time, const Time end_time, const Time& time_epsilon = 0.001,
-                       std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::Verbose<Time, Step>::create())
+    explicit Simulator(
+        const std::string model_name, const Devs::Model::AbstractModelFactory<Time> model, const Time start_time,
+        const Time end_time, const Time& time_epsilon = 0.001,
+        std::unique_ptr<Printer::Base<Time, Step>> printer = Printer::ColoredVerbose<Time, Step>::create())
         : p_calendar_{std::make_unique<Devs::_impl::Calendar<Time>>(start_time, end_time, time_epsilon)},
           p_printer_{std::move(printer)} {
         setup_calendar_listeners();
