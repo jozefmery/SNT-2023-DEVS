@@ -51,8 +51,7 @@ LIBS    = $(addprefix -l, )
 LIBDIRS = $(addprefix -L, )
 
 default: release
-all: default
-.PHONY: default all release debug run run-% debug-run clean-run clean archive format
+.PHONY: default release debug run run-% debug-run clean-run clean archive format
 
 RELDIR  = Release
 DDIR    = Debug
