@@ -1160,7 +1160,7 @@ class State : public Servers {
 
   public: // friends
     friend std::ostream& operator<<(std::ostream& os, const State& state) {
-        return os << static_cast<Servers>(state) << " sending response: " << std::boolalpha
+        return os << static_cast<Servers>(state) << " | sending response: " << std::boolalpha
                   << state.is_sending_response();
     }
 
