@@ -499,15 +499,19 @@ class Servers {
         return next;
     }
 
-    void assign_customer_to_server(const Customer customer, const size_t server_idx) {
+    TimeT gen_error_time() { return gen_error_().value_or(0.0); }
+
+    TimeT gen_service_time() { return gen_service_time_(); }
+
+    void assign_customer_to_server(const Customer customer, const size_t server_idx, const TimeT service_time) {
         if (server_idx >= servers_.size()) {
             throw std::runtime_error("Invalid index in assign_customer_to_server");
         }
         auto& server = servers_[server_idx];
-        const auto error_time = gen_error_().value_or(0.0);
+        const auto error_time = gen_error_time();
         // customer error handling is part of the "busy" phase
         // include the error time in the overall remaining time
-        const auto remaining = gen_service_time_() + error_time;
+        const auto remaining = service_time + error_time;
         server.current_customer = customer;
         server.remaining = remaining;
         server.total_busy_time += remaining;
@@ -523,9 +527,9 @@ class Servers {
         server.remaining = 0.0;
     }
 
-    void add_customer(const Customer customer) {
+    void add_customer(const Customer customer, const TimeT service_time) {
         if (const auto server_idx = idle_server_idx()) {
-            assign_customer_to_server(customer, *server_idx);
+            assign_customer_to_server(customer, *server_idx, service_time);
             return;
         }
         queue_.push(customer);
@@ -917,7 +921,7 @@ State delta_external(const State& state_prev, const TimeT& elapsed, const Custom
         if (!customer.product_counter) {
             throw std::runtime_error("Unexpected customer in product counter");
         }
-        state.add_customer(customer);
+        state.add_customer(customer, state.gen_service_time());
     }
     // ignore other messages
 
@@ -942,7 +946,7 @@ void delta_internal_next_customer(State& state) {
         if (idle_idx == std::nullopt) {
             throw std::runtime_error("Expected at least one idle server in ProductCounter during internal transition");
         }
-        state.assign_customer_to_server(*customer, *idle_idx);
+        state.assign_customer_to_server(*customer, *idle_idx, state.gen_service_time());
     }
 }
 
@@ -1134,14 +1138,30 @@ create_model(const SelfServiceParameters& parameters) {
 } // namespace SelfService
 
 namespace Checkout {
-// TODO
-class State {
+
+std::function<std::optional<TimeT>()> error_generator(const double error_chance, const double error_handle_rate) {
+    return [error_chance, gen_time = Devs::Random::exponential(error_handle_rate),
+            rand = Devs::Random::uniform()]() -> std::optional<TimeT> {
+        if (rand() < error_chance) {
+            return gen_time();
+        }
+        return std::nullopt;
+    };
+}
+
+class State : public Servers {
   public: // ctors, dtor
-    State(const CheckoutParameters&) {}
+    State(const std::string name, const CheckoutParameters& parameters)
+        : Servers{name, parameters.servers, Devs::Random::exponential(parameters.service_rate),
+                  error_generator(parameters.error_chance, parameters.error_handle_rate)},
+          sending_response_{false} {}
 
   public: // friends
     // TODO
     friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+
+  private: // members
+    bool sending_response_;
 };
 
 State delta_external(const State& state, const TimeT&, const Customer&) {
@@ -1165,7 +1185,8 @@ TimeT ta(const State&) {
 }
 
 Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    return Atomic<Customer, Customer, State>{State{parameters.checkout}, delta_external, delta_internal, out, ta};
+    return Atomic<Customer, Customer, State>{State{MODEL_NAME, parameters.checkout}, delta_external, delta_internal,
+                                             out, ta};
 }
 } // namespace Checkout
 
@@ -1329,7 +1350,7 @@ void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 void print_stats(Simulator& simulator, const TimeT duration) {
 
     const auto product_counter_state =
-        simulator.model().components()->at("product counter")->state()->value<ProductCounter::State>();
+        simulator.model().components()->at(ProductCounter::MODEL_NAME)->state()->value<ProductCounter::State>();
     std::cout << "Queue stats:\n";
     std::cout << "Product counter:\n";
     std::cout << "Servers:              " << product_counter_state.servers().size() << "\n";
@@ -1371,7 +1392,7 @@ void queue_simulation_small() {
     // queue parameters
     const auto parameters = Parameters{
         time_params,
-        {time_params.normalize_rate(100 * time_params.duration_hours()), 0.75, 0.5},
+        {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.75},
         {2, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
