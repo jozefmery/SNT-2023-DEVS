@@ -422,7 +422,7 @@ class Servers {
     Servers(const std::string& name, const size_t servers, const std::function<double()> gen_service_time,
             const std::function<std::optional<TimeT>()> gen_error)
         : name_{name}, gen_service_time_{gen_service_time}, gen_error_{gen_error},
-          servers_{servers, Server{{}, 0.0, 0.0, 0.0}}, queue_{}, queue_occupancy_sum_{} {
+          servers_{servers, Server{{}, 0.0, 0.0, 0.0}}, queue_{}, queue_occupancy_sum_{}, served_customers_{0} {
         if (servers == 0) {
             throw std::runtime_error("Number of server set to 0");
         }
@@ -524,6 +524,7 @@ class Servers {
         auto& server = servers_[server_idx];
         server.current_customer = std::nullopt;
         server.remaining = 0.0;
+        served_customers_++;
     }
 
     void add_customer(const Customer customer, const TimeT service_time) {
@@ -621,6 +622,8 @@ class Servers {
 
     const std::string& name() const { return name_; }
 
+    int served_customers() const { return served_customers_; }
+
   private: // members
     std::string name_;
     std::function<double()> gen_service_time_;
@@ -628,6 +631,7 @@ class Servers {
     std::vector<Server> servers_;
     std::queue<Customer> queue_;
     TimeT queue_occupancy_sum_;
+    int served_customers_;
 };
 
 namespace CustomerCoordinator {
@@ -1561,6 +1565,7 @@ void print_stats(Simulator& simulator, const TimeT duration) {
         simulator.model().components()->at(SelfCheckout::MODEL_NAME)->state()->value<SelfCheckout::State>();
     std::cout << "Queue stats:\n";
     std::cout << "Product counter stats:\n";
+    std::cout << "Served customers:     " << product_counter_state.served_customers() << "\n";
     std::cout << "Servers:              " << product_counter_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << product_counter_state.average_queue_size(duration) << "\n";
     std::cout << "Idle:                 " << (1 - product_counter_state.total_busy_ratio(duration)) * 100 << "\n";
@@ -1569,6 +1574,7 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Error/Busy:           " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
     std::cout << "--------------------------------------\n";
     std::cout << "Checkout stats:\n";
+    std::cout << "Served customers:     " << checkout_state.served_customers() << "\n";
     std::cout << "Servers:              " << checkout_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << checkout_state.average_queue_size(duration) << "\n";
     std::cout << "Idle:                 " << (1 - checkout_state.total_busy_ratio(duration)) * 100 << "\n";
@@ -1577,6 +1583,7 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Error/Busy:           " << checkout_state.total_error_busy_ratio() * 100 << "\n";
     std::cout << "--------------------------------------\n";
     std::cout << "Self checkout stats:\n";
+    std::cout << "Served customers:     " << self_checkout_state.served_customers() << "\n";
     std::cout << "Servers:              " << self_checkout_state.servers().size() << "\n";
     std::cout << "Average queue size:   " << self_checkout_state.average_queue_size(duration) << "\n";
     std::cout << "Idle:                 " << (1 - self_checkout_state.total_busy_ratio(duration)) * 100 << "\n";
@@ -1608,7 +1615,7 @@ void traffic_light_simulation() {
     simulator.run();
 }
 
-void queue_simulation_small() {
+void queue_simulation_short() {
     using namespace _impl::Queue;
     // simulation time window ;
     const TimeParameters time_params{0.0, 10 * Time::MINUTE};
@@ -1635,7 +1642,7 @@ void queue_simulation_small() {
     print_stats(simulator, time_params.duration());
 }
 
-void queue_simulation_large() {
+void queue_simulation_long() {
 
     using namespace _impl::Queue;
     // simulation time window ;

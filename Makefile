@@ -24,7 +24,7 @@ ARCHIVELIST = $(SRCDIR)/ $(INCLUDEDIR)/ Makefile README.txt
 ARCHIVER  = zip -r
 
 # target name
-TARGET    = devs_app
+TARGET    = devs_demo_app
 
 # file extensions
 SRCEXT    = cpp
@@ -100,6 +100,9 @@ run-%: release
 # run debug
 debug-run: debug
 	@./$(BINDIR)/$(TARGET)_d $(ARGS)
+
+debug-run-%: debug
+	@./$(BINDIR)/$(TARGET)_d $*
 
 # run with clear
 clean-run: release
