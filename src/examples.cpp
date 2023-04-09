@@ -400,8 +400,9 @@ class Customer {
   public: // members
     bool age_verify;
     bool product_counter;
-    bool self_service = true;
-    bool checkout = true;
+    // TODO
+    bool self_service = false;
+    bool checkout = false;
 };
 
 struct Server {
@@ -1123,14 +1124,21 @@ class State {
   public: // ctors, dtor
     State(const std::string name) : name_{name}, customers_{} {}
 
+  public: // friends
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        return os << "customers: " << state.customer_count();
+    }
+
   public: // methods
+    size_t customer_count() const { return customers_.size(); }
+
     bool has_customers() const { return !customers_.empty(); }
 
     void add_customer(const Customer customer) { customers_.push(customer); }
 
     void pop_customer() { customers_.pop(); }
 
-    std::optional<Customer> next_customer() {
+    std::optional<Customer> next_customer() const {
         if (!has_customers()) {
             return std::nullopt;
         }
@@ -1151,21 +1159,30 @@ State delta_external(const State& prev_state, const TimeT&, const CustomerCoordi
     if (tc != nullptr && tc->target == state.name()) {
         state.add_customer(tc->customer);
     }
+    // ignore other messages
     return state;
 }
 
-State delta_internal(const State& state) {
-    // TODO
+State delta_internal(const State& prev_state) {
+    State state = prev_state;
+    if (!state.has_customers()) {
+        std::runtime_error("Unexpected internal transition in CustomerOutput when empty");
+    }
+    state.pop_customer();
     return state;
 }
 
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
+Customer out(const State& state) {
+    if (const auto customer = state.next_customer()) {
+        return *customer;
+    }
+    throw std::runtime_error("Unexpected output in CustomerOutput when empty");
 }
 
-TimeT ta(const State&) {
-    // TODO
+TimeT ta(const State& state) {
+    if (state.has_customers()) {
+        return 0.0;
+    }
     return Devs::Const::INF;
 }
 
@@ -1177,12 +1194,25 @@ Atomic<CustomerCoordinator::Message, Customer, State> create_model() {
 
 std::unordered_map<std::string, Devs::Model::AbstractModelFactory<TimeT>> components(const Parameters& parameters) {
     return {{CustomerCoordinator::MODEL_NAME, CustomerCoordinator::create_model()},
-            {ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)}};
+            {ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)},
+            {CustomerOutput::MODEL_NAME, CustomerOutput::create_model()}};
+}
+
+Devs::Dynamic customer_to_message(const Devs::Dynamic& customer) {
+    return CustomerCoordinator::Message{
+        CustomerCoordinator::TargetedCustomer{customer, CustomerCoordinator::MODEL_NAME}};
 }
 
 std::unordered_map<std::optional<std::string>, Devs::Model::Influencers> influencers() {
     // TODO
-    return {};
+    return {
+        {{}, {{CustomerOutput::MODEL_NAME, {}}}}, // setup output
+        {CustomerOutput::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
+        {ProductCounter::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
+        {CustomerCoordinator::MODEL_NAME,
+         {{{}, customer_to_message}, // setup input
+          {ProductCounter::MODEL_NAME, {}}}},
+    };
 }
 
 Compound create_model(const Parameters& parameters) { return {components(parameters), influencers()}; }
@@ -1207,6 +1237,7 @@ void setup_inputs_outputs(Simulator& simulator, const Parameters parameters) {
 }
 
 void print_stats(Simulator& simulator, const TimeT duration) {
+
     const auto product_counter_state =
         simulator.model().components()->at("product counter")->state()->value<ProductCounter::State>();
     std::cout << "Queue stats:\n";
