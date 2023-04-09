@@ -401,8 +401,7 @@ class Customer {
     bool age_verify;
     bool product_counter;
     bool self_service = true;
-    // TODO
-    bool checkout = false;
+    bool checkout = true;
 };
 
 struct Server {
@@ -576,7 +575,8 @@ class Servers {
     std::vector<double> server_error_to_busy_ratios() const {
         std::vector<double> ratios{};
         for (const auto& server : servers_) {
-            ratios.push_back(server.total_error_time / server.total_busy_time);
+            const auto busy = server.total_busy_time;
+            ratios.push_back(busy < Time::EPS ? 0.0 : server.total_error_time / server.total_busy_time);
         }
         return ratios;
     }
@@ -975,7 +975,7 @@ CustomerCoordinator::Message next_finished_customer(const State& state) {
 
 CustomerCoordinator::Message out(const State& state) {
     if (state.idle()) {
-        throw std::runtime_error("Out in ProductCounter while idle");
+        throw std::runtime_error("Output in ProductCounter while idle");
     }
 
     return next_finished_customer(state);
@@ -1151,78 +1151,271 @@ std::function<std::optional<TimeT>()> error_generator(const double error_chance,
 
 class State : public Servers {
   public: // ctors, dtor
-    State(const std::string name, const CheckoutParameters& parameters)
-        : Servers{name, parameters.servers, Devs::Random::exponential(parameters.service_rate),
-                  error_generator(parameters.error_chance, parameters.error_handle_rate)},
+    State(const std::string name, const size_t servers, const double service_rate, const double error_chance,
+          const double error_handle_rate)
+        : Servers{name, servers, Devs::Random::exponential(service_rate),
+                  error_generator(error_chance, error_handle_rate)},
           sending_response_{false} {}
 
   public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        return os << static_cast<Servers>(state) << " sending response: " << std::boolalpha
+                  << state.is_sending_response();
+    }
+
+    bool is_sending_response() const { return sending_response_; }
+    void send_response() { sending_response_ = true; }
+    void response_sent() { sending_response_ = false; }
 
   private: // members
     bool sending_response_;
 };
 
-State delta_external(const State& state, const TimeT&, const Customer&) {
-    // TODO
+State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
+    // create copy
+    State state = state_prev;
+    // advance time before potentially adding a new customer
+    state.advance_time(elapsed);
+    const CustomerCoordinator::TargetedCustomer* tc =
+        std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
+    if (tc != nullptr && tc->target == state.name()) {
+        const auto customer = tc->customer;
+        if (!customer.checkout) {
+            throw std::runtime_error("Unexpected customer in Checkout");
+        }
+        state.add_customer(customer, state.gen_service_time());
+    }
+    const CustomerCoordinator::Queries* query = std::get_if<CustomerCoordinator::Queries>(std::addressof(message));
+    if (query != nullptr && *query == CustomerCoordinator::Queries::CHECKOUT_QUEUE_SIZES) {
+        state.send_response();
+    }
+    // ignore other messages
+
     return state;
 }
 
-State delta_internal(const State& state) {
-    // TODO
+void delta_internal_finish_serving(State& state) {
+    const auto finished_idx = state.next_ready_server_idx();
+    if (finished_idx == std::nullopt) {
+        throw std::runtime_error("Expected at least one busy server in Checkout during internal transition");
+    }
+    const auto delta = state.servers()[*finished_idx].remaining;
+    // advance time before serving for correct queue occupancy
+    state.advance_time(delta);
+    state.finish_serving_customer(*finished_idx);
+}
+
+void delta_internal_next_customer(State& state) {
+    // no need to check more than once as only one server may finish during an internal delta
+    if (const auto customer = state.next_customer()) {
+        state.pop_customer();
+        const auto idle_idx = state.idle_server_idx();
+        if (idle_idx == std::nullopt) {
+            throw std::runtime_error("Expected at least one idle server in Checkout during internal transition");
+        }
+        state.assign_customer_to_server(*customer, *idle_idx, state.gen_service_time());
+    }
+}
+
+State delta_internal(const State& state_prev) {
+    State state = state_prev;
+
+    if (state.idle()) {
+        throw std::runtime_error("Internal delta in Checkout while idle");
+    }
+
+    if (state.is_sending_response()) {
+        state.response_sent();
+        return state;
+    }
+
+    delta_internal_finish_serving(state);
+    delta_internal_next_customer(state);
+
     return state;
 }
 
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
+CustomerCoordinator::Message next_finished_customer(const State& state) {
+    const auto customer_ptr = state.next_ready_customer_ref();
+    if (customer_ptr == nullptr) {
+        throw std::runtime_error("Expected at least one served customer in Checkout during output");
+    }
+    auto customer = *customer_ptr;
+    customer.checkout = false; // checkout served
+    return CustomerCoordinator::TargetedCustomer{customer, CustomerCoordinator::MODEL_NAME};
 }
 
-TimeT ta(const State&) {
-    // TODO
-    return Devs::Const::INF;
+CustomerCoordinator::Message out(const State& state) {
+    if (state.idle()) {
+        throw std::runtime_error("Output in Checkout while idle");
+    }
+
+    if (state.is_sending_response()) {
+        return CustomerCoordinator::CheckoutQueueSizeResponse{state.name(), state.queue_size()};
+    }
+
+    return next_finished_customer(state);
 }
 
-Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    return Atomic<Customer, Customer, State>{State{MODEL_NAME, parameters.checkout}, delta_external, delta_internal,
-                                             out, ta};
+TimeT ta(const State& state) {
+    if (state.idle()) {
+        return Devs::Const::INF;
+    }
+
+    // send response instantly
+    if (state.is_sending_response()) {
+        return 0.0;
+    }
+
+    if (const auto remaining = state.remaining_to_next_ready()) {
+        return *remaining;
+    }
+
+    throw std::runtime_error("Expected at least one busy server in Checkout during time advance");
+}
+
+Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>
+create_model(const CheckoutParameters& parameters) {
+    return Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>{
+        State{MODEL_NAME, parameters.servers, parameters.service_rate, parameters.error_chance,
+              parameters.error_handle_rate},
+        delta_external, delta_internal, out, ta};
 }
 } // namespace Checkout
 
 namespace SelfCheckout {
-// TODO
-class State {
+
+class State : public Checkout::State {
   public: // ctors, dtor
-    State(const SelfCheckoutParameters&) {}
+    State(const std::string name, const SelfCheckoutParameters& parameters)
+        : Checkout::State{name, parameters.servers, parameters.service_rate, parameters.error_chance,
+                          parameters.error_handle_rate},
+          gen_age_verify_time_{Devs::Random::exponential(parameters.age_verify_rate)} {}
 
   public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        return os << static_cast<Checkout::State>(state);
+    }
+
+  public: // methods
+    TimeT gen_age_verify_time(const bool age_verify) {
+        if (age_verify) {
+            return gen_age_verify_time_();
+        }
+        return 0.0;
+    }
+
+  private: // members
+    std::function<double()> gen_age_verify_time_;
 };
 
-State delta_external(const State& state, const TimeT&, const Customer&) {
-    // TODO
+State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
+    // create copy
+    State state = state_prev;
+    // advance time before potentially adding a new customer
+    state.advance_time(elapsed);
+    const CustomerCoordinator::TargetedCustomer* tc =
+        std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
+    if (tc != nullptr && tc->target == state.name()) {
+        const auto customer = tc->customer;
+        if (!customer.checkout) {
+            throw std::runtime_error("Unexpected customer in SelfCheckout");
+        }
+        state.add_customer(customer, state.gen_service_time() + state.gen_age_verify_time(customer.age_verify));
+    }
+    const CustomerCoordinator::Queries* query = std::get_if<CustomerCoordinator::Queries>(std::addressof(message));
+    if (query != nullptr && *query == CustomerCoordinator::Queries::CHECKOUT_QUEUE_SIZES) {
+        state.send_response();
+    }
+    // ignore other messages
+
     return state;
 }
 
-State delta_internal(const State& state) {
-    // TODO
+void delta_internal_finish_serving(State& state) {
+    const auto finished_idx = state.next_ready_server_idx();
+    if (finished_idx == std::nullopt) {
+        throw std::runtime_error("Expected at least one busy server in SelfCheckout during internal transition");
+    }
+    const auto delta = state.servers()[*finished_idx].remaining;
+    // advance time before serving for correct queue occupancy
+    state.advance_time(delta);
+    state.finish_serving_customer(*finished_idx);
+}
+
+void delta_internal_next_customer(State& state) {
+    // no need to check more than once as only one server may finish during an internal delta
+    if (const auto customer = state.next_customer()) {
+        state.pop_customer();
+        const auto idle_idx = state.idle_server_idx();
+        if (idle_idx == std::nullopt) {
+            throw std::runtime_error("Expected at least one idle server in SelfCheckout during internal transition");
+        }
+        state.assign_customer_to_server(*customer, *idle_idx,
+                                        state.gen_service_time() + state.gen_age_verify_time(customer->age_verify));
+    }
+}
+
+State delta_internal(const State& state_prev) {
+    State state = state_prev;
+
+    if (state.idle()) {
+        throw std::runtime_error("Internal delta in SelfCheckout while idle");
+    }
+
+    if (state.is_sending_response()) {
+        state.response_sent();
+        return state;
+    }
+
+    delta_internal_finish_serving(state);
+    delta_internal_next_customer(state);
+
     return state;
 }
 
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
+CustomerCoordinator::Message next_finished_customer(const State& state) {
+    const auto customer_ptr = state.next_ready_customer_ref();
+    if (customer_ptr == nullptr) {
+        throw std::runtime_error("Expected at least one served customer in SelfCheckout during output");
+    }
+    auto customer = *customer_ptr;
+    customer.checkout = false; // checkout served
+    return CustomerCoordinator::TargetedCustomer{customer, CustomerCoordinator::MODEL_NAME};
 }
 
-TimeT ta(const State&) {
-    // TODO
-    return Devs::Const::INF;
+CustomerCoordinator::Message out(const State& state) {
+    if (state.idle()) {
+        throw std::runtime_error("Output in SelfCheckout while idle");
+    }
+
+    if (state.is_sending_response()) {
+        return CustomerCoordinator::CheckoutQueueSizeResponse{state.name(), state.queue_size()};
+    }
+
+    return next_finished_customer(state);
 }
 
-Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    return Atomic<Customer, Customer, State>{State{parameters.self_checkout}, delta_external, delta_internal, out, ta};
+TimeT ta(const State& state) {
+    if (state.idle()) {
+        return Devs::Const::INF;
+    }
+
+    // send response instantly
+    if (state.is_sending_response()) {
+        return 0.0;
+    }
+
+    if (const auto remaining = state.remaining_to_next_ready()) {
+        return *remaining;
+    }
+
+    throw std::runtime_error("Expected at least one busy server in SelfCheckout during time advance");
+}
+
+Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State> create_model(const Parameters& parameters) {
+    return Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>{
+        State{MODEL_NAME, parameters.self_checkout}, delta_external, delta_internal, out, ta};
 }
 } // namespace SelfCheckout
 
