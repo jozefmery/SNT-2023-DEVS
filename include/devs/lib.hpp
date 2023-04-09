@@ -936,18 +936,20 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
     // model
     void on_model_state_transition(const std::string& name, const Time& time, const std::string& prev,
                                    const std::string& next) override {
-        this->s_ << prefix(time)
-                 << text_style("Model " + name + " state: ",
-                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+        this->s_ << prefix(time) << prefix(time)
+                 << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
+                 << text_style(" state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+
                  << text_style(prev, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_RED, TextDecoration::STRIKE})
                  << text_style(" -> ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
                  << text_style(next, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
 
     void on_sim_start(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time)
-                 << text_style("Model " + name + " initial state: ",
-                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+        this->s_ << prefix(time) << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
+                 << text_style(" initial state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
                  << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
     void on_sim_step(const Time& time, const Step& step) override {
@@ -958,9 +960,9 @@ template <typename Time, typename Step = std::uint64_t> class Verbose : public B
                  << "\n";
     }
     void on_sim_end(const std::string& name, const Time& time, const std::string& state) override {
-        this->s_ << prefix(time)
-                 << text_style("Model " + name + " ending state: ",
-                               {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+        this->s_ << prefix(time) << text_style("Model ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
+                 << text_style(name, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN})
+                 << text_style(" ending state: ", {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_WHITE})
                  << text_style(state, {TextDecoration::FONT_BOLD, TextDecoration::FG_BRIGHT_GREEN}) << "\n";
     }
 
