@@ -715,7 +715,7 @@ class State {
             return false;
         }
         // checkout is last
-        return !next_customer_to_self_service() && next->checkout;
+        return !next_customer_to_product_counter() && !next_customer_to_self_service() && next->checkout;
     }
 
     bool next_customer_should_exit() const { return !next_customer_to_checkout(); }
@@ -730,7 +730,7 @@ class State {
     }
 
     void receive_response_from_self_checkout(const CheckoutQueueSizeResponse response) {
-        checkout_response_ = response;
+        self_checkout_response_ = response;
         awaiting_responses_ = !checkout_response_received();
     }
 
@@ -828,13 +828,15 @@ State delta_internal(const State& state_prev) {
         throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when awaiting responses");
     }
 
-    if (state.should_send_checkout_query()) {
-        state.await_responses();
+    if (state.responses_received()) {
+        state.clear_responses();
+        state.pop_customer();
         return state;
     }
 
-    if (state.responses_received()) {
-        state.clear_responses();
+    if (state.should_send_checkout_query()) {
+        state.await_responses();
+        return state;
     }
 
     state.pop_customer();
@@ -878,12 +880,12 @@ Message out(const State& state_prev) {
         throw std::runtime_error("Unexpected output in CustomerCoordinator when awaiting responses");
     }
 
-    if (state.should_send_checkout_query()) {
-        return Queries::CHECKOUT_QUEUE_SIZES;
-    }
-
     if (state.responses_received()) {
         return out_responses_received(state);
+    }
+
+    if (state.should_send_checkout_query()) {
+        return Queries::CHECKOUT_QUEUE_SIZES;
     }
 
     return out_target_customer(state);
@@ -891,7 +893,6 @@ Message out(const State& state_prev) {
 
 TimeT ta(const State& state) {
     if (state.awaiting_responses()) {
-
         return Devs::Const::INF;
     }
 
@@ -1220,13 +1221,13 @@ void delta_internal_next_customer(State& state) {
 State delta_internal(const State& state_prev) {
     State state = state_prev;
 
-    if (state.idle()) {
-        throw std::runtime_error("Internal delta in Checkout while idle");
-    }
-
     if (state.is_sending_response()) {
         state.response_sent();
         return state;
+    }
+
+    if (state.idle()) {
+        throw std::runtime_error("Internal delta in Checkout while idle");
     }
 
     delta_internal_finish_serving(state);
@@ -1246,25 +1247,25 @@ CustomerCoordinator::Message next_finished_customer(const State& state) {
 }
 
 CustomerCoordinator::Message out(const State& state) {
-    if (state.idle()) {
-        throw std::runtime_error("Output in Checkout while idle");
-    }
-
     if (state.is_sending_response()) {
         return CustomerCoordinator::CheckoutQueueSizeResponse{state.name(), state.queue_size()};
+    }
+
+    if (state.idle()) {
+        throw std::runtime_error("Output in Checkout while idle");
     }
 
     return next_finished_customer(state);
 }
 
 TimeT ta(const State& state) {
-    if (state.idle()) {
-        return Devs::Const::INF;
-    }
-
     // send response instantly
     if (state.is_sending_response()) {
         return 0.0;
+    }
+
+    if (state.idle()) {
+        return Devs::Const::INF;
     }
 
     if (const auto remaining = state.remaining_to_next_ready()) {
@@ -1359,13 +1360,13 @@ void delta_internal_next_customer(State& state) {
 State delta_internal(const State& state_prev) {
     State state = state_prev;
 
-    if (state.idle()) {
-        throw std::runtime_error("Internal delta in SelfCheckout while idle");
-    }
-
     if (state.is_sending_response()) {
         state.response_sent();
         return state;
+    }
+
+    if (state.idle()) {
+        throw std::runtime_error("Internal delta in SelfCheckout while idle");
     }
 
     delta_internal_finish_serving(state);
@@ -1385,25 +1386,25 @@ CustomerCoordinator::Message next_finished_customer(const State& state) {
 }
 
 CustomerCoordinator::Message out(const State& state) {
-    if (state.idle()) {
-        throw std::runtime_error("Output in SelfCheckout while idle");
-    }
-
     if (state.is_sending_response()) {
         return CustomerCoordinator::CheckoutQueueSizeResponse{state.name(), state.queue_size()};
+    }
+
+    if (state.idle()) {
+        throw std::runtime_error("Output in SelfCheckout while idle");
     }
 
     return next_finished_customer(state);
 }
 
 TimeT ta(const State& state) {
-    if (state.idle()) {
-        return Devs::Const::INF;
-    }
-
     // send response instantly
     if (state.is_sending_response()) {
         return 0.0;
+    }
+
+    if (state.idle()) {
+        return Devs::Const::INF;
     }
 
     if (const auto remaining = state.remaining_to_next_ready()) {
@@ -1413,9 +1414,10 @@ TimeT ta(const State& state) {
     throw std::runtime_error("Expected at least one busy server in SelfCheckout during time advance");
 }
 
-Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State> create_model(const Parameters& parameters) {
+Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>
+create_model(const SelfCheckoutParameters& parameters) {
     return Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>{
-        State{MODEL_NAME, parameters.self_checkout}, delta_external, delta_internal, out, ta};
+        State{MODEL_NAME, parameters}, delta_external, delta_internal, out, ta};
 }
 } // namespace SelfCheckout
 
@@ -1497,7 +1499,9 @@ std::unordered_map<std::string, Devs::Model::AbstractModelFactory<TimeT>> compon
     return {{CustomerCoordinator::MODEL_NAME, CustomerCoordinator::create_model()},
             {ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)},
             {CustomerOutput::MODEL_NAME, CustomerOutput::create_model()},
-            {SelfService::MODEL_NAME, SelfService::create_model(parameters.self_service)}};
+            {SelfService::MODEL_NAME, SelfService::create_model(parameters.self_service)},
+            {Checkout::MODEL_NAME, Checkout::create_model(parameters.checkout)},
+            {SelfCheckout::MODEL_NAME, SelfCheckout::create_model(parameters.self_checkout)}};
 }
 
 Devs::Dynamic customer_to_message(const Devs::Dynamic& customer) {
@@ -1506,16 +1510,21 @@ Devs::Dynamic customer_to_message(const Devs::Dynamic& customer) {
 }
 
 std::unordered_map<std::optional<std::string>, Devs::Model::Influencers> influencers() {
-    // TODO
     return {
         {{}, {{CustomerOutput::MODEL_NAME, {}}}}, // setup output
         {CustomerOutput::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
         {ProductCounter::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
         {SelfService::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
+        {Checkout::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
+        {SelfCheckout::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
         {CustomerCoordinator::MODEL_NAME,
-         {{{}, customer_to_message}, // setup input
-          {ProductCounter::MODEL_NAME, {}},
-          {SelfService::MODEL_NAME, {}}}},
+         {
+             {{}, customer_to_message}, // setup input
+             {ProductCounter::MODEL_NAME, {}},
+             {SelfService::MODEL_NAME, {}},
+             {Checkout::MODEL_NAME, {}},
+             {SelfCheckout::MODEL_NAME, {}},
+         }},
     };
 }
 
