@@ -1616,7 +1616,7 @@ void queue_simulation_small() {
     const auto parameters = Parameters{
         time_params,
         {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.75},
-        {2, time_params.normalize_rate(50 * time_params.duration_hours())},
+        {3, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
             2,
@@ -1624,7 +1624,7 @@ void queue_simulation_small() {
             0.05,
             time_params.normalize_rate(10 * time_params.duration_hours()),
         },
-        {4, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
+        {6, time_params.normalize_rate(12 * time_params.duration_hours()), 0.3,
          time_params.normalize_rate(30 * time_params.duration_hours()),
          time_params.normalize_rate(30 * time_params.duration_hours())},
     };
@@ -1647,7 +1647,7 @@ void queue_simulation_large() {
         {2, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
-            2,
+            3,
             time_params.normalize_rate(20 * time_params.duration_hours()),
             0.05,
             time_params.normalize_rate(10 * time_params.duration_hours()),
