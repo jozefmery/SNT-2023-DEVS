@@ -400,8 +400,8 @@ class Customer {
   public: // members
     bool age_verify;
     bool product_counter;
+    bool self_service = true;
     // TODO
-    bool self_service = false;
     bool checkout = false;
 };
 
@@ -531,14 +531,14 @@ class Servers {
         queue_.push(customer);
     }
 
-    std::optional<Customer> next_customer() {
+    std::optional<Customer> next_customer() const {
         if (!has_waiting_customer()) {
             return std::nullopt;
         }
-        Customer customer = queue_.front();
-        queue_.pop();
-        return customer;
+        return queue_.front();
     }
+
+    void pop_customer() { queue_.pop(); }
 
     void advance_time(const TimeT delta) {
         for (auto& server : servers_) {
@@ -937,6 +937,7 @@ void delta_internal_finish_serving(State& state) {
 void delta_internal_next_customer(State& state) {
     // no need to check more than once as only one server may finish during an internal delta
     if (const auto customer = state.next_customer()) {
+        state.pop_customer();
         const auto idle_idx = state.idle_server_idx();
         if (idle_idx == std::nullopt) {
             throw std::runtime_error("Expected at least one idle server in ProductCounter during internal transition");
@@ -1007,42 +1008,128 @@ struct CustomerState {
     TimeT remaining;
 };
 
-// TODO
 class State {
   public: // ctors, dtor
-    State(const SelfServiceParameters&) {}
+    State(const std::string name, const SelfServiceParameters& parameters)
+        : name_{name}, gen_service_time_{Devs::Random::exponential(parameters.service_rate)}, customers_{} {}
 
   public: // friends
-    // TODO
-    friend std::ostream& operator<<(std::ostream& os, const State&) { return os; }
+    friend std::ostream& operator<<(std::ostream& os, const State& state) {
+        return os << "customers: " << state.customer_count();
+    }
+
+  public: // methods
+    const std::string& name() const { return name_; }
+
+    size_t customer_count() const { return customers_.size(); }
+
+    bool has_customer() const { return !customers_.empty(); }
+
+    void add_customer(const Customer customer) { customers_.push_back({customer, gen_service_time_()}); }
+
+    void pop_next_ready_customer() {
+        if (const auto idx = next_ready_idx()) {
+            customers_.erase(customers_.begin() + *idx);
+        }
+    }
+
+    void advance_time(const TimeT delta) {
+        for (auto& customer : customers_) {
+            customer.remaining -= delta;
+        }
+    }
+
+    std::optional<size_t> next_ready_idx() const {
+        std::optional<size_t> min_idx{std::nullopt};
+        TimeT min{Devs::Const::INF};
+
+        for (auto customer = customers_.begin(); customer != customers_.end(); customer += 1) {
+            if (customer->remaining < min) {
+                min = customer->remaining;
+                min_idx = std::distance(customers_.begin(), customer);
+            }
+        }
+        return min_idx;
+    }
+
+    std::optional<TimeT> remaining_to_next_ready() const {
+        const auto idx = next_ready_idx();
+        if (idx == std::nullopt) {
+            return std::nullopt;
+        }
+
+        return customers_[*idx].remaining;
+    }
+
+    void advance_time_to_next_ready() {
+        if (has_customer()) {
+            advance_time(*remaining_to_next_ready());
+        }
+    }
+
+    const Customer* next_ready_customer_ref() const {
+        const auto idx = next_ready_idx();
+        if (idx == std::nullopt) {
+            return nullptr;
+        }
+
+        return std::addressof(customers_[*idx].customer);
+    }
 
   private: // members
+    std::string name_;
     std::function<double()> gen_service_time_;
     std::vector<CustomerState> customers_;
 };
 
-State delta_external(const State& state, const TimeT&, const Customer&) {
-    // TODO
+State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
+    // create copy
+    State state = state_prev;
+    // advance time before potentially adding a new customer
+    state.advance_time(elapsed);
+    const CustomerCoordinator::TargetedCustomer* tc =
+        std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
+    if (tc != nullptr && tc->target == state.name()) {
+        const auto customer = tc->customer;
+        if (!customer.self_service) {
+            throw std::runtime_error("Unexpected customer in self service");
+        }
+        state.add_customer(customer);
+    }
+    // ignore other messages
     return state;
 }
 
-State delta_internal(const State& state) {
-    // TODO
+State delta_internal(const State& state_prev) {
+    State state = state_prev;
+    if (!state.has_customer()) {
+        throw std::runtime_error("Unexpected internal delta in SelfService while empty");
+    }
+    state.advance_time_to_next_ready();
+    state.pop_next_ready_customer();
     return state;
 }
 
-Customer out(const State&) {
-    // TODO
-    return Customer{false, false};
+CustomerCoordinator::Message out(const State& state) {
+    if (!state.has_customer()) {
+        throw std::runtime_error("Unexpected output in SelfService while empty");
+    }
+    auto customer = *state.next_ready_customer_ref();
+    customer.self_service = false; // self service done
+    return CustomerCoordinator::TargetedCustomer{customer, CustomerCoordinator::MODEL_NAME};
 }
 
-TimeT ta(const State&) {
-    // TODO
-    return Devs::Const::INF;
+TimeT ta(const State& state) {
+    if (!state.has_customer()) {
+        return Devs::Const::INF;
+    }
+    return *state.remaining_to_next_ready();
 }
 
-Atomic<Customer, Customer, State> create_model(const Parameters& parameters) {
-    return Atomic<Customer, Customer, State>{State{parameters.self_service}, delta_external, delta_internal, out, ta};
+Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>
+create_model(const SelfServiceParameters& parameters) {
+    return Atomic<CustomerCoordinator::Message, CustomerCoordinator::Message, State>{
+        State{MODEL_NAME, parameters}, delta_external, delta_internal, out, ta};
 }
 } // namespace SelfService
 
@@ -1195,7 +1282,8 @@ Atomic<CustomerCoordinator::Message, Customer, State> create_model() {
 std::unordered_map<std::string, Devs::Model::AbstractModelFactory<TimeT>> components(const Parameters& parameters) {
     return {{CustomerCoordinator::MODEL_NAME, CustomerCoordinator::create_model()},
             {ProductCounter::MODEL_NAME, ProductCounter::create_model(parameters.product_counter)},
-            {CustomerOutput::MODEL_NAME, CustomerOutput::create_model()}};
+            {CustomerOutput::MODEL_NAME, CustomerOutput::create_model()},
+            {SelfService::MODEL_NAME, SelfService::create_model(parameters.self_service)}};
 }
 
 Devs::Dynamic customer_to_message(const Devs::Dynamic& customer) {
@@ -1209,9 +1297,11 @@ std::unordered_map<std::optional<std::string>, Devs::Model::Influencers> influen
         {{}, {{CustomerOutput::MODEL_NAME, {}}}}, // setup output
         {CustomerOutput::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
         {ProductCounter::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
+        {SelfService::MODEL_NAME, {{CustomerCoordinator::MODEL_NAME, {}}}},
         {CustomerCoordinator::MODEL_NAME,
          {{{}, customer_to_message}, // setup input
-          {ProductCounter::MODEL_NAME, {}}}},
+          {ProductCounter::MODEL_NAME, {}},
+          {SelfService::MODEL_NAME, {}}}},
     };
 }
 
@@ -1248,6 +1338,7 @@ void print_stats(Simulator& simulator, const TimeT duration) {
     std::cout << "Busy:                 " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
     std::cout << "Error:                " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
     std::cout << "Error/Busy:           " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
+    std::cout << "--------------------------------------\n";
     // TODO
 }
 } // namespace Queue
@@ -1280,7 +1371,7 @@ void queue_simulation_small() {
     // queue parameters
     const auto parameters = Parameters{
         time_params,
-        {time_params.normalize_rate(100 * time_params.duration_hours()), 0.5, 0.5},
+        {time_params.normalize_rate(100 * time_params.duration_hours()), 0.75, 0.5},
         {2, time_params.normalize_rate(50 * time_params.duration_hours())},
         {time_params.normalize_rate(100 * time_params.duration_hours())},
         {
