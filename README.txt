@@ -8,6 +8,7 @@ Single header DEVS library: ./include/devs/lib.hpp
 It supports atomic and compound DEVS models with arbitrary nesting, printing, and more.
 
 The other files belong to the demo application.
+Application tested on the merlin.fit.vutbr.cz server.
 Application build dependencies:
   - GCC         v9.5.0
   - GNU Make    v3.82

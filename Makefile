@@ -18,7 +18,7 @@ OBJDIR      = obj
 INCLUDEDIR  = include
 
 # archive content definition
-ARCHIVELIST = $(SRCDIR)/ $(INCLUDEDIR)/ Makefile README.txt
+ARCHIVELIST = $(SRCDIR)/ $(INCLUDEDIR)/ Makefile README.txt xmeryj00-snt-devs-2023.pdf
 
 # helper programs
 ARCHIVER  = zip -r

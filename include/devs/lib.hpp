@@ -25,30 +25,30 @@ namespace Devs {
 namespace Random {
 using Engine = std::mt19937_64;
 
+namespace _impl {
+inline Engine seeded_engine(const std::optional<int> seed) { return Engine{seed ? *seed : std::random_device{}()}; }
+
+template <typename Ret, typename Dist> std::function<Ret()> generator(const std::optional<int> seed, Dist dist) {
+    return [engine = seeded_engine(seed), dist = std::move(dist)]() mutable { return dist(engine); };
+}
+} // namespace _impl
+
 template <typename T = double>
 std::function<T()> uniform(const T from = 0.0, const T to = 1.0, const std::optional<int> seed = {}) {
-    Engine gen{seed ? *seed : std::random_device{}()};
-    std::uniform_real_distribution<T> dist{from, to};
-    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+    return _impl::generator<T>(seed, std::uniform_real_distribution<T>{from, to});
 }
 
 template <typename T = int>
 std::function<T()> uniform_int(const T from, const T to, const std::optional<int> seed = {}) {
-    Engine gen{seed ? *seed : std::random_device{}()};
-    std::uniform_int_distribution<T> dist{from, to};
-    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+    return _impl::generator<T>(seed, std::uniform_int_distribution<T>{from, to});
 }
 
 inline std::function<int()> poisson(const double mean, const std::optional<int> seed = {}) {
-    Engine gen{seed ? *seed : std::random_device{}()};
-    std::poisson_distribution<> dist{mean};
-    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+    return _impl::generator<int>(seed, std::poisson_distribution<>{mean});
 }
 
 inline std::function<double()> exponential(const double rate, const std::optional<int> seed = {}) {
-    Engine gen{seed ? *seed : std::random_device{}()};
-    std::exponential_distribution<> dist{rate};
-    return [gen = std::move(gen), dist = std::move(dist)]() mutable { return dist(gen); };
+    return _impl::generator<double>(seed, std::exponential_distribution<>{rate});
 }
 
 template <typename T = double> T rand() {
@@ -136,8 +136,8 @@ template <typename X, typename Y, typename S, typename Time = double> struct Ato
 
   public: // members
     S s;
-    std::function<S(const S&, const Time&, const X&)> delta_external;
-    std::function<S(const S&)> delta_internal;
+    std::function<S(S, const Time&, const X&)> delta_external;
+    std::function<S(S)> delta_internal;
     std::function<Y(const S&)> out;
     std::function<Time(const S&)> ta;
 };
@@ -490,8 +490,10 @@ template <typename Time> class IOModel {
     }
 
     void state_transitioned(const std::string& prev, const std::string& next) const {
-        invoke_listeners<const std::string&, const Time&, const std::string&, const std::string&>(
-            state_transition_listeners_, name(), calendar_time(), prev, next);
+        if (prev != next) {
+            invoke_listeners<const std::string&, const Time&, const std::string&, const std::string&>(
+                state_transition_listeners_, name(), calendar_time(), prev, next);
+        }
     }
 
     void add_input_listener(const Listener<const std::string&, const Dynamic&> listener) {

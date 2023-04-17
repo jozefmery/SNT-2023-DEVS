@@ -4,6 +4,7 @@
  *  Date:       10.04.2023
  */
 
+#include <chrono>
 #include <devs/examples.hpp>
 #include <devs/lib.hpp>
 #include <iostream>
@@ -70,8 +71,11 @@ void run_examples(const std::unordered_map<std::string, std::function<void()>> e
 
     for (const auto& example : example_names) {
         std::cout << "Running example: " << example << "\n";
+        const auto time_start = std::chrono::high_resolution_clock::now();
         examples.at(example)();
-        std::cout << "Finished example: " << example << "\n";
+        const auto time_end = std::chrono::high_resolution_clock::now();
+        const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start).count();
+        std::cout << "Finished example: " << example << " in " << duration << " milliseconds\n";
         std::cout << "--------------------\n";
     }
 }

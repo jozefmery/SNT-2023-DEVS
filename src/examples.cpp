@@ -25,8 +25,8 @@ namespace _impl {
 Atomic<Null, Null, Null> create_minimal_atomic_model() {
     return Atomic<Null, Null, Null>{
         Null{},
-        [](const Null& s, const TimeT&, const Null&) { return s; },
-        [](const Null& s) { return s; },
+        [](Null s, const TimeT&, const Null&) { return s; },
+        [](Null s) { return s; },
         [](const Null&) { return Null{}; },
         [](const Null&) { return Devs::Const::INF; },
     };
@@ -251,40 +251,40 @@ State delta_internal_blink_mode(const State& s) {
     return {s.mode, blink_mode_color_duration(s.next_color), s.next_color, next_color_blink_mode(s)};
 }
 
-TimeT ta(const State& s) { return s.remaining; }
-
-State delta_external(const State& s, const TimeT& elapsed, const Input& message) {
+State delta_external(State state, const TimeT& elapsed, const Input& message) {
     static auto handlers = messages_handlers();
     const auto it = handlers.find(message);
     if (it == handlers.end()) {
         std::cerr << "WARNING: Ignoring unhandled message, code: " << static_cast<int>(message) << "\n";
-        return s;
+        return state;
     }
     assert(elapsed <= ta(s));
-    return it->second(s, elapsed);
+    return it->second(state, elapsed);
 }
 
-State delta_internal(const State& s) {
-    if (!s.powered()) {
+State delta_internal(State state) {
+    if (!state.powered()) {
         throw std::runtime_error("Internal delta should not happen while not powered");
     }
-    if (*s.mode == Mode::NORMAL) {
+    if (*state.mode == Mode::NORMAL) {
 
-        if (!s.color) {
+        if (!state.color) {
             throw std::runtime_error("Missing color in state during normal internal transition");
         }
 
-        if (!s.next_color) {
+        if (!state.next_color) {
             throw std::runtime_error("Missing next_color in state during normal internal transition");
         }
 
-        return delta_internal_normal_mode(s);
+        return delta_internal_normal_mode(state);
     }
 
-    return delta_internal_blink_mode(s);
+    return delta_internal_blink_mode(state);
 }
 
-Output out(const State& s) { return s.next_color; }
+Output out(const State& state) { return state.next_color; }
+
+TimeT ta(const State& state) { return state.remaining; }
 
 Atomic<TrafficLight::Input, TrafficLight::Output, TrafficLight::State> create_model() {
 
@@ -446,14 +446,20 @@ class Servers {
   public: // methods
     bool has_waiting_customer() const { return !queue_.empty(); }
 
-    bool all_servers_idle() const {
+    size_t busy_server_count() const {
+        size_t count = 0;
         for (const auto& server : servers_) {
             if (server.busy()) {
-                return false;
+                count++;
             }
         }
-        return true;
+
+        return count;
     }
+
+    size_t idle_server_count() const { return servers_.size() - busy_server_count(); }
+
+    bool all_servers_idle() const { return busy_server_count() == 0; }
 
     bool idle() const { return !has_waiting_customer() && all_servers_idle(); }
 
@@ -522,6 +528,11 @@ class Servers {
             throw std::runtime_error("Invalid index in finish_serving_customer");
         }
         auto& server = servers_[server_idx];
+
+        if (server.idle()) {
+            throw std::runtime_error("Finishing an idle server");
+        }
+
         server.current_customer = std::nullopt;
         server.remaining = 0.0;
         served_customers_++;
@@ -594,6 +605,8 @@ class Servers {
         return sum / ratios.size();
     }
 
+    double total_idle_ratio(const TimeT duration) const { return std::max((1 - total_busy_ratio(duration)), 0.0); }
+
     double total_error_ratio(const TimeT duration) const {
         const auto ratios = server_error_ratios(duration);
         if (ratios.size() == 0) {
@@ -635,27 +648,27 @@ class Servers {
 };
 
 namespace CustomerCoordinator {
-constexpr auto MODEL_NAME = "customer coordinator";
+constexpr auto MODEL_NAME = "Customer coordinator";
 }
 
 namespace ProductCounter {
-constexpr auto MODEL_NAME = "product counter";
+constexpr auto MODEL_NAME = "Product counter";
 }
 
 namespace SelfService {
-constexpr auto MODEL_NAME = "self service";
+constexpr auto MODEL_NAME = "Self service";
 }
 
 namespace Checkout {
-constexpr auto MODEL_NAME = "checkout";
+constexpr auto MODEL_NAME = "Checkout";
 }
 
 namespace SelfCheckout {
-constexpr auto MODEL_NAME = "self checkout";
+constexpr auto MODEL_NAME = "Self checkout";
 }
 
 namespace CustomerOutput {
-constexpr auto MODEL_NAME = "customer output";
+constexpr auto MODEL_NAME = "Customer output";
 }
 
 namespace CustomerCoordinator {
@@ -802,13 +815,12 @@ void delta_external_receive_response(State& state, const CheckoutQueueSizeRespon
     throw std::runtime_error("Unexpected response from " + response.from + " in external delta of CustomerCoordinator");
 }
 
-State delta_external(const State& prev_state, const TimeT&, const Message& message) {
+State delta_external(State state, const TimeT&, const Message& message) {
 
     if (std::holds_alternative<Queries>(message)) {
         throw std::runtime_error("Unexpected Query message in external delta of CustomerCoordinator");
     }
 
-    State state = prev_state; // create copy
     if (const TargetedCustomer* tc = std::get_if<TargetedCustomer>(std::addressof(message))) {
         delta_external_add_customer(state, *tc);
         return state;
@@ -822,8 +834,7 @@ State delta_external(const State& prev_state, const TimeT&, const Message& messa
     throw std::runtime_error("Unexpected variant in external delta of CustomerCoordinator");
 }
 
-State delta_internal(const State& state_prev) {
-    State state = state_prev;
+State delta_internal(State state) {
     if (!state.has_customers()) {
         throw std::runtime_error("Unexpected internal delta in CustomerCoordinator when there are no customers");
     }
@@ -874,8 +885,7 @@ Message out_target_customer(const State& state) {
     throw std::runtime_error("Unexpected customer in out_target_customer of CustomerCoordinator");
 }
 
-Message out(const State& state_prev) {
-    State state = state_prev;
+Message out(const State& state) {
     if (!state.has_customers()) {
         throw std::runtime_error("Unexpected output in CustomerCoordinator when there are no customers");
     }
@@ -914,9 +924,7 @@ Atomic<Message, Message, State> create_model() {
 namespace ProductCounter {
 using State = Servers;
 
-State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
-    // create copy
-    State state = state_prev;
+State delta_external(State state, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
     // advance time before potentially adding a new customer
     state.advance_time(elapsed);
     const CustomerCoordinator::TargetedCustomer* tc =
@@ -955,9 +963,7 @@ void delta_internal_next_customer(State& state) {
     }
 }
 
-State delta_internal(const State& state_prev) {
-    State state = state_prev;
-
+State delta_internal(State state) {
     if (state.idle()) {
         throw std::runtime_error("Internal delta in ProductCounter while idle");
     }
@@ -1091,9 +1097,7 @@ class State {
     std::vector<CustomerState> customers_;
 };
 
-State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
-    // create copy
-    State state = state_prev;
+State delta_external(State state, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
     // advance time before potentially adding a new customer
     state.advance_time(elapsed);
     const CustomerCoordinator::TargetedCustomer* tc =
@@ -1109,8 +1113,7 @@ State delta_external(const State& state_prev, const TimeT& elapsed, const Custom
     return state;
 }
 
-State delta_internal(const State& state_prev) {
-    State state = state_prev;
+State delta_internal(State state) {
     if (!state.has_customer()) {
         throw std::runtime_error("Unexpected internal delta in SelfService while empty");
     }
@@ -1176,9 +1179,7 @@ class State : public Servers {
     bool sending_response_;
 };
 
-State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
-    // create copy
-    State state = state_prev;
+State delta_external(State state, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
     // advance time before potentially adding a new customer
     state.advance_time(elapsed);
     const CustomerCoordinator::TargetedCustomer* tc =
@@ -1222,9 +1223,7 @@ void delta_internal_next_customer(State& state) {
     }
 }
 
-State delta_internal(const State& state_prev) {
-    State state = state_prev;
-
+State delta_internal(State state) {
     if (state.is_sending_response()) {
         state.response_sent();
         return state;
@@ -1314,9 +1313,7 @@ class State : public Checkout::State {
     std::function<double()> gen_age_verify_time_;
 };
 
-State delta_external(const State& state_prev, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
-    // create copy
-    State state = state_prev;
+State delta_external(State state, const TimeT& elapsed, const CustomerCoordinator::Message& message) {
     // advance time before potentially adding a new customer
     state.advance_time(elapsed);
     const CustomerCoordinator::TargetedCustomer* tc =
@@ -1361,9 +1358,7 @@ void delta_internal_next_customer(State& state) {
     }
 }
 
-State delta_internal(const State& state_prev) {
-    State state = state_prev;
-
+State delta_internal(State state) {
     if (state.is_sending_response()) {
         state.response_sent();
         return state;
@@ -1459,8 +1454,7 @@ class State {
     std::queue<Customer> customers_;
 };
 
-State delta_external(const State& prev_state, const TimeT&, const CustomerCoordinator::Message& message) {
-    State state = prev_state;
+State delta_external(State state, const TimeT&, const CustomerCoordinator::Message& message) {
     const CustomerCoordinator::TargetedCustomer* tc =
         std::get_if<CustomerCoordinator::TargetedCustomer>(std::addressof(message));
     if (tc != nullptr && tc->target == state.name()) {
@@ -1470,8 +1464,7 @@ State delta_external(const State& prev_state, const TimeT&, const CustomerCoordi
     return state;
 }
 
-State delta_internal(const State& prev_state) {
-    State state = prev_state;
+State delta_internal(State state) {
     if (!state.has_customers()) {
         std::runtime_error("Unexpected internal transition in CustomerOutput when empty");
     }
@@ -1563,37 +1556,28 @@ void print_stats(Simulator& simulator, const TimeT duration) {
         simulator.model().components()->at(Checkout::MODEL_NAME)->state()->value<Checkout::State>();
     const auto self_checkout_state =
         simulator.model().components()->at(SelfCheckout::MODEL_NAME)->state()->value<SelfCheckout::State>();
-    std::cout << "Queue stats:\n";
-    std::cout << "Product counter stats:\n";
-    std::cout << "Served customers:     " << product_counter_state.served_customers() << "\n";
-    std::cout << "Servers:              " << product_counter_state.servers().size() << "\n";
-    std::cout << "Average queue size:   " << product_counter_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << std::max((1 - product_counter_state.total_busy_ratio(duration)), 0.0) * 100
-              << "\n";
-    std::cout << "Busy:                 " << product_counter_state.total_busy_ratio(duration) * 100 << "\n";
-    std::cout << "Error:                " << product_counter_state.total_error_ratio(duration) * 100 << "\n";
-    std::cout << "Error/Busy:           " << product_counter_state.total_error_busy_ratio() * 100 << "\n";
-    std::cout << "--------------------------------------\n";
-    std::cout << "Checkout stats:\n";
-    std::cout << "Served customers:     " << checkout_state.served_customers() << "\n";
-    std::cout << "Servers:              " << checkout_state.servers().size() << "\n";
-    std::cout << "Average queue size:   " << checkout_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << std::max((1 - checkout_state.total_busy_ratio(duration)), 0.0) * 100
-              << "\n";
-    std::cout << "Busy:                 " << checkout_state.total_busy_ratio(duration) * 100 << "\n";
-    std::cout << "Error:                " << checkout_state.total_error_ratio(duration) * 100 << "\n";
-    std::cout << "Error/Busy:           " << checkout_state.total_error_busy_ratio() * 100 << "\n";
-    std::cout << "--------------------------------------\n";
-    std::cout << "Self checkout stats:\n";
-    std::cout << "Served customers:     " << self_checkout_state.served_customers() << "\n";
-    std::cout << "Servers:              " << self_checkout_state.servers().size() << "\n";
-    std::cout << "Average queue size:   " << self_checkout_state.average_queue_size(duration) << "\n";
-    std::cout << "Idle:                 " << std::max((1 - self_checkout_state.total_busy_ratio(duration)), 0.0) * 100
-              << "\n";
-    std::cout << "Busy:                 " << self_checkout_state.total_busy_ratio(duration) * 100 << "\n";
-    std::cout << "Error:                " << self_checkout_state.total_error_ratio(duration) * 100 << "\n";
-    std::cout << "Error/Busy:           " << self_checkout_state.total_error_busy_ratio() * 100 << "\n";
-    std::cout << "--------------------------------------\n";
+
+    const std::vector<std::pair<std::string, const Servers*>> stations{
+        {ProductCounter::MODEL_NAME, &product_counter_state},
+        {Checkout::MODEL_NAME, &checkout_state},
+        {SelfCheckout::MODEL_NAME, &self_checkout_state}};
+
+    std::cout << std::setprecision(2) << std::fixed;
+    std::cout << "Queue system stats:\n";
+
+    for (const auto& [name, state] : stations) {
+        std::cout << name << " station stats:\n";
+        std::cout << "Servers:              " << state->servers().size() << "\n";
+        std::cout << "Currently serving:    " << state->busy_server_count() << "\n";
+        std::cout << "Served customers:     " << state->served_customers() << "\n";
+        std::cout << "Current queue size:   " << state->queue_size() << "\n";
+        std::cout << "Average queue size:   " << state->average_queue_size(duration) << "\n";
+        std::cout << "Busy:                 " << state->total_busy_ratio(duration) * 100 << " %\n";
+        std::cout << "Idle:                 " << state->total_idle_ratio(duration) * 100 << " %\n";
+        std::cout << "Error:                " << state->total_error_ratio(duration) * 100 << " %\n";
+        std::cout << "Error/Busy:           " << state->total_error_busy_ratio() * 100 << " %\n";
+        std::cout << "--------------------------------------\n";
+    }
 }
 } // namespace Queue
 
