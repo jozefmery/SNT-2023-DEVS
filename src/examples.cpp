@@ -1604,7 +1604,7 @@ void traffic_light_simulation() {
 
 void queue_simulation_short() {
     using namespace _impl::Queue;
-    // simulation time window ;
+    // simulation time window
     const TimeParameters time_params{0.0, 10 * Time::MINUTE};
     // queue parameters
     const auto parameters = Parameters{
