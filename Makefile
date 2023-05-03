@@ -1,5 +1,5 @@
 #	File:    Makefile
-#	Date:    17.04.2023
+#	Date:    03.05.2023
 # Project: SNT-DEVS-2023
 #	Author:  Bc. Jozef Méry - xmeryj00@vut.cz
 

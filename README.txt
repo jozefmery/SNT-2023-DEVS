@@ -1,6 +1,6 @@
 Project:    SNT-DEVS-2023
 Author:     Bc. Jozef Méry - xmeryj00@vutbr.cz
-Date:       17.04.2023
+Date:       03.05.2023
 
 This is a DEVS simulation library and a demo application with four examples.
 
