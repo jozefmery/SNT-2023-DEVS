@@ -4,10 +4,12 @@ Date:       03.05.2023
 
 This is a DEVS simulation library and a demo application with four examples.
 
+Also check the xmeryj000-snt-devs-2023.pdf documentation.
+
 Single header DEVS library: ./include/devs/lib.hpp
 It supports atomic and compound DEVS models with arbitrary nesting, printing, and more.
 
-The other files belong to the demo application.
+The other source/header files belong to the demo application.
 Application tested on the merlin.fit.vutbr.cz server.
 Application build dependencies:
   - GCC         v9.5.0
@@ -33,13 +35,13 @@ Running the debug application build using Make (the build command can be omitted
 
 where ARGUMENTS are the following:
 
-  -h | --help           - Display help message and the example list.
+  -h | --help           - Display a help message and the example list.
   minimal-atomic        - Empty atomic model.
   minimal-compound      - Empty compound model.
   traffic-light         - Traffic light example with input and output messages.
-  queue-short           - Queue theory example with a 10 minute duration.
-  queue-long            - Queue theory example with a 10 day duration (same parameters as queue-short).
-  queue-large           - Queue theory example with a 1 hour duration (queue-short arrivals and duration 
+  queue-short           - Queue theory example with a 10-minute duration.
+  queue-long            - Queue theory example with a 10-day duration (same parameters as queue-short).
+  queue-large           - Queue theory example with a 1-hour duration (queue-short arrivals and server count
                                                                         multiplied by a factor of 10).
 
 More than one example can be provided for running.
